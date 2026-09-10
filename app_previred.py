@@ -60,7 +60,7 @@ if 'db_trabajadores' not in st.session_state:
     ])
 
 # ==========================================
-# ESTILOS CSS ADAPTABLES Y CORPORATIVOS (CORREGIDO BOTÓN INVISIBLE Y LOGO)
+# ESTILOS CSS ADAPTABLES Y CORPORATIVOS
 # ==========================================
 st.markdown("""
 <style>
@@ -79,7 +79,7 @@ st.markdown("""
         color: #ffffff;
     }
     
-    /* 🔴 SOLUCIÓN DEFINITIVA AL BOTÓN VACÍO: Fuerza color de texto a blanco en TODAS las capas del botón */
+    /* Botón Iniciar Sesión Blanco y Azul */
     div[data-testid="stFormSubmitButton"] > button,
     div[data-testid="baseButton-secondaryFormSubmit"] > button,
     .stButton > button {
@@ -108,12 +108,8 @@ st.markdown("""
         border-color: #0f4399 !important;
     }
     
-    /* Inputs del formulario limpios */
-    input {
-        background-color: #f8fafc !important;
-        color: #0f172a !important;
-        border-radius: 6px !important;
-    }
+    /* Inputs limpios */
+    input { background-color: #f8fafc !important; color: #0f172a !important; border-radius: 6px !important; }
 
     /* Tarjetas Dashboard */
     .metric-card {
@@ -132,13 +128,189 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 🔴 ELIMINADO EL SVG DEL TRIÁNGULO. AHORA ES UN TEXTO CORPORATIVO LIMPIO E IMPECABLE.
 logo_seyses_oficial = """
 <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 30px;">
     <span style="font-size: 38px; font-weight: 900; color: #ffffff; letter-spacing: -1.5px; font-family: 'Arial', sans-serif;">SEYSES</span>
     <span style="font-size: 11px; color: #4ea8de; letter-spacing: 2.5px; text-transform: uppercase; margin-top: 2px;">Personas | Procesos | Resultados</span>
 </div>
 """
+
+# ==========================================
+# FUNCIONES OPTIMIZADAS CON CACHÉ DE MEMORIA
+# ==========================================
+@st.cache_data(show_spinner=False)
+def procesar_pdf_previred(pdf_bytes):
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    texto_completo = ""
+    for page in reader.pages:
+        if page.extract_text():
+            texto_completo += page.extract_text() + "\n"
+    if "Certificado de Pagos" in texto_completo or "certifica:" in texto_completo:
+        return extraer_certificado_previred(texto_completo)
+    else:
+        return extraer_planilla_previred(reader)
+
+def extraer_planilla_previred(reader):
+    data = {}
+    contexto = "UNKNOWN"
+    current_afp = "AFP"
+    ruts_empresa = ['77.419.473-8', '24.598.191-0']
+    for page in reader.pages:
+        text = page.extract_text()
+        if not text: continue
+        texto_upper = text.upper()
+        if "FONDO DE PENSIONES" in texto_upper and "AFP" in texto_upper:
+            contexto = "AFP"
+            m = re.search(r'AFP\s+([A-Za-z]+)', text, re.IGNORECASE)
+            if m: current_afp = "AFP " + m.group(1).strip().capitalize()
+        elif "SEGURO SOCIAL PREVISIONAL" in texto_upper:
+            contexto = "SEGURO"
+        elif "FONASA" in texto_upper or "PLANILLA DE DECLARACION Y PAGO SIMULTANEO" in texto_upper:
+            contexto = "FONASA"
+        elif "ISAPRE" in texto_upper:
+            contexto = "ISAPRE"
+            m = re.search(r'ISAPRE\s+([A-Za-z]+)', text, re.IGNORECASE)
+            if m: contexto = "ISAPRE " + m.group(1).strip().capitalize()
+        elif "MUTUAL DE SEGURIDAD" in texto_upper or "ACHS" in texto_upper or "INSTITUTO DE SEGURIDAD" in texto_upper:
+            contexto = "MUTUAL"
+        elif "CAJA DE COMPENSACION" in texto_upper or "LOS HEROES" in texto_upper or "LOS ANDES" in texto_upper:
+            contexto = "CAJA"
+
+        for line in text.split('\n'):
+            m_rut = re.search(r'\b(\d{1,2}\.\d{3}\.\d{3}\-[0-9Kk])\b', line)
+            if not m_rut: continue
+            rut = m_rut.group(1).upper()
+            if rut in ruts_empresa: continue
+            if rut not in data:
+                data[rut] = {
+                    'RUT': rut, 'Nombre PDF': '', 'AFP': '', 'Salud': '', 
+                    'Renta Seguro Social': 0, 'Monto Seguro Social': 0, 
+                    'Renta AFP': 0, 'Cotizacion AFP': 0, 'SIS AFP': 0, 'APVI': 0, 
+                    'Renta AFC': 0, 'AFC Afiliado': 0, 'AFC Empleador': 0, 
+                    'Renta Salud': 0, 'Cotizacion Salud': 0, 
+                    'Renta Mutual': 0, 'Cotizacion Mutual': 0, 
+                    'Renta Caja Isapre': 0, 'Renta Caja No Isapre': 0, 'Cotizacion Caja': 0,
+                    '_Renta_Caja_Base': 0
+                }
+            idx = line.find(rut) + len(rut)
+            resto = line[idx:].strip()
+            m_name = re.match(r'^([A-ZÑÁÉÍÓÚ\s]+)', resto)
+            if m_name:
+                name = m_name.group(1).strip()
+                name = re.sub(r'\s+AFP$', '', name) 
+                name = re.sub(r'\s+JC$', '', name)  
+                if len(name) > len(data[rut]['Nombre PDF']):
+                    data[rut]['Nombre PDF'] = name
+            numeros = re.findall(r'\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b', resto)
+            num_puros = [int(n.replace('.', '')) for n in numeros]
+            monetary_gt1000 = [n for n in num_puros if n > 1000]
+            if not num_puros: continue
+
+            if contexto == "SEGURO":
+                if monetary_gt1000: data[rut]['Renta Seguro Social'] = monetary_gt1000[0]
+                if len(monetary_gt1000) >= 2: data[rut]['Monto Seguro Social'] = monetary_gt1000[1]
+            elif contexto == "AFP":
+                data[rut]['AFP'] = current_afp
+                if len(monetary_gt1000) >= 1: data[rut]['Renta AFP'] = monetary_gt1000[0]
+                if len(monetary_gt1000) >= 2: data[rut]['Cotizacion AFP'] = monetary_gt1000[1]
+                if len(monetary_gt1000) >= 3: data[rut]['SIS AFP'] = monetary_gt1000[2]
+                if len(monetary_gt1000) >= 5:
+                    data[rut]['Renta AFC'] = monetary_gt1000[3]
+                    data[rut]['AFC Empleador'] = monetary_gt1000[4]
+                    data[rut]['AFC Afiliado'] = 0
+                elif len(monetary_gt1000) >= 4:
+                    data[rut]['Renta AFC'] = monetary_gt1000[0]
+                    data[rut]['AFC Empleador'] = monetary_gt1000[-1]
+            elif contexto == "FONASA":
+                data[rut]['Salud'] = 'FONASA'
+                if monetary_gt1000: data[rut]['Renta Salud'] = monetary_gt1000[0]
+                if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Salud'] = monetary_gt1000[1]
+            elif "ISAPRE" in contexto:
+                data[rut]['Salud'] = contexto
+                if monetary_gt1000: data[rut]['Renta Salud'] = monetary_gt1000[0]
+                if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Salud'] = monetary_gt1000[1]
+            elif contexto == "MUTUAL":
+                if monetary_gt1000: data[rut]['Renta Mutual'] = monetary_gt1000[0]
+                if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Mutual'] = monetary_gt1000[1]
+            elif contexto == "CAJA":
+                if monetary_gt1000: data[rut]['_Renta_Caja_Base'] = monetary_gt1000[0]
+                if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Caja'] = monetary_gt1000[1]
+
+    for rut, row in data.items():
+        if "ISAPRE" in str(row['Salud']).upper():
+            row['Renta Caja Isapre'] = row['_Renta_Caja_Base']
+        else:
+            row['Renta Caja No Isapre'] = row['_Renta_Caja_Base']
+    return list(data.values())
+
+def extraer_certificado_previred(text):
+    data = {}
+    bloques = re.split(r'Que,\s+las\s+cotizaciones\s+previsionales\s+del\s+Sr\.\(a\)', text, flags=re.IGNORECASE)
+    for bloque in bloques[1:]:
+        match_info = re.search(r'(.+?),\s+Rut:\s+([\d\.\-kK]+)', bloque)
+        if not match_info: continue
+        nombre = match_info.group(1).strip()
+        rut = match_info.group(2).strip().upper()
+        if rut not in data:
+             data[rut] = {
+                    'RUT': rut, 'Nombre PDF': nombre, 'AFP': '', 'Salud': '', 
+                    'Renta Seguro Social': 0, 'Monto Seguro Social': 0, 
+                    'Renta AFP': 0, 'Cotizacion AFP': 0, 'SIS AFP': 0, 'APVI': 0, 
+                    'Renta AFC': 0, 'AFC Afiliado': 0, 'AFC Empleador': 0, 
+                    'Renta Salud': 0, 'Cotizacion Salud': 0, 
+                    'Renta Mutual': 0, 'Cotizacion Mutual': 0, 
+                    'Renta Caja Isapre': 0, 'Renta Caja No Isapre': 0, 'Cotizacion Caja': 0
+                }
+        record = data[rut]
+        filas = re.findall(r'([A-Z\s\(\)\.\-]+?)\s+(Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre)\s+(\d{4})\s+(REM|GRA|RET|LEY|COM)\s+\$([\d\.]+)\s+\$([\d\.]+)', bloque)
+        for f in filas:
+            institucion = f[0].strip().upper()
+            imponible = int(f[4].replace('.', ''))
+            monto = int(f[5].replace('.', ''))
+            if "SEGURO SOCIAL" in institucion:
+                record['Renta Seguro Social'] = imponible
+                record['Monto Seguro Social'] = monto
+            elif "OBLIGATORIA" in institucion:
+                record['AFP'] = "AFP " + institucion.replace("(COTIZACION OBLIGATORIA)", "").strip()
+                record['Renta AFP'] = imponible
+                record['Cotizacion AFP'] = monto
+            elif "(SIS)" in institucion:
+                record['SIS AFP'] = monto
+            elif "APVI" in institucion:
+                record['APVI'] = monto
+            elif "(AFC)" in institucion:
+                record['Renta AFC'] = imponible
+                record['AFC Empleador'] = monto
+            elif any(x in institucion for x in ["FONASA", "ISAPRE", "MASVIDA", "CRUZ BLANCA", "CONSALUD", "COLMENA", "BANMEDICA"]):
+                record['Salud'] = institucion
+                record['Renta Salud'] = imponible
+                record['Cotizacion Salud'] = monto
+            elif any(x in institucion for x in ["MUTUAL", "ACHS", "IST", "ISL"]):
+                record['Renta Mutual'] = imponible
+                record['Cotizacion Mutual'] = monto
+            elif any(x in institucion for x in ["CAJA", "HEROES", "ANDES"]):
+                record['Cotizacion Caja'] = monto
+                if "ISAPRE" in record['Salud']:
+                    record['Renta Caja Isapre'] = imponible
+                else:
+                    record['Renta Caja No Isapre'] = imponible
+    return list(data.values())
+
+@st.cache_data(show_spinner=False)
+def generar_excel_formato_previred(df):
+    columnas_plantilla = [
+        'RUT', 'Nombre PDF', 'AFP', 'Salud', 'Renta Seguro Social', 'Monto Seguro Social', 
+        'Renta AFP', 'Cotizacion AFP', 'SIS AFP', 'APVI', 'Renta AFC', 'AFC Afiliado', 
+        'AFC Empleador', 'Renta Salud', 'Cotizacion Salud', 'Renta Mutual', 
+        'Cotizacion Mutual', 'Renta Caja Isapre', 'Renta Caja No Isapre', 'Cotizacion Caja'
+    ]
+    for col in columnas_plantilla:
+        if col not in df.columns: df[col] = 0
+    df = df[columnas_plantilla]
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Previred_Report')
+    return output.getvalue()
 
 # ==========================================
 # PANTALLA DE LOGIN
@@ -157,7 +329,6 @@ if not st.session_state.logged_in:
             user_input = st.text_input("Usuario", placeholder="ej: admin")
             pass_input = st.text_input("Contraseña", type="password", placeholder="••••••••")
             
-            # Botón con CSS blindado para que siempre diga Iniciar sesión en color blanco
             submitted = st.form_submit_button("Iniciar sesión")
             
             if submitted:
@@ -174,8 +345,10 @@ if not st.session_state.logged_in:
                         st.error("Contraseña incorrecta.")
                 else:
                     st.error("Usuario no encontrado.")
-
         st.markdown('</div>', unsafe_allow_html=True)
+    
+    # 🌟 FIRMA DE CREADORA EN EL LOGIN (OPCIONAL)
+    st.markdown('<p style="text-align: center; color: #64748b; font-size: 12px; margin-top: 30px;">Desarrollado y Creado por <b>Yazmyn Canales</b></p>', unsafe_allow_html=True)
     st.stop()
 
 # ==========================================
@@ -193,6 +366,9 @@ if st.sidebar.button("🚪 Cerrar sesión", use_container_width=True):
     st.session_state.audit_logs.insert(0, {"time": datetime.now().strftime("%H:%M"), "user": st.session_state.current_user, "action": "Cerró sesión"})
     st.session_state.logged_in = False
     st.rerun()
+
+# 🌟 FIRMA DE CREADORA EN EL SIDEBAR
+st.sidebar.markdown('<div style="margin-top: 40px; text-align: center; color: #475569; font-size: 11px; padding: 10px; border-top: 1px solid #1f3152;">Desarrollado y Creado por<br><b style="color: #94a3b8; font-size: 12px;">Yazmyn Canales</b></div>', unsafe_allow_html=True)
 
 # =========================================================================
 # 1. 🏠 DASHBOARD PRINCIPAL
@@ -230,199 +406,33 @@ if seccion == "🏠 Dashboard Principal":
         """, unsafe_allow_html=True)
 
 # =========================================================================
-# 2. 📄 EXTRACTOR PREVIRED
+# 2. 📄 EXTRACTOR PREVIRED (AHORA OPTIMIZADO CON CACHÉ)
 # =========================================================================
 elif seccion == "📄 Extractor Previred":
     st.markdown('<div class="main-header">📄 Extractor y Formateador Previred</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Extracción directa de datos desde PDFs de Previred con desglose exacto de Renta AFC, Afiliado y Empleador.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Extracción ultrarrápida de datos desde PDFs de Previred con desglose exacto de Renta AFC.</div>', unsafe_allow_html=True)
     st.markdown('---')
 
-    uploaded_previred = st.file_uploader("Sube el PDF de Previred (Planilla Larga o Certificado)", type=['pdf'], key="up_prev_vfinal")
-
-    def procesar_pdf_previred(pdf_file):
-        reader = PdfReader(pdf_file)
-        texto_completo = ""
-        for page in reader.pages:
-            if page.extract_text():
-                texto_completo += page.extract_text() + "\n"
-        if "Certificado de Pagos" in texto_completo or "certifica:" in texto_completo:
-            return extraer_certificado_previred(texto_completo)
-        else:
-            return extraer_planilla_previred(reader)
-
-    def extraer_planilla_previred(reader):
-        data = {}
-        contexto = "UNKNOWN"
-        current_afp = "AFP"
-        ruts_empresa = ['77.419.473-8', '24.598.191-0']
-        for page in reader.pages:
-            text = page.extract_text()
-            if not text: continue
-            texto_upper = text.upper()
-            if "FONDO DE PENSIONES" in texto_upper and "AFP" in texto_upper:
-                contexto = "AFP"
-                m = re.search(r'AFP\s+([A-Za-z]+)', text, re.IGNORECASE)
-                if m: current_afp = "AFP " + m.group(1).strip().capitalize()
-            elif "SEGURO SOCIAL PREVISIONAL" in texto_upper:
-                contexto = "SEGURO"
-            elif "FONASA" in texto_upper or "PLANILLA DE DECLARACION Y PAGO SIMULTANEO" in texto_upper:
-                contexto = "FONASA"
-            elif "ISAPRE" in texto_upper:
-                contexto = "ISAPRE"
-                m = re.search(r'ISAPRE\s+([A-Za-z]+)', text, re.IGNORECASE)
-                if m: contexto = "ISAPRE " + m.group(1).strip().capitalize()
-            elif "MUTUAL DE SEGURIDAD" in texto_upper or "ACHS" in texto_upper or "INSTITUTO DE SEGURIDAD" in texto_upper:
-                contexto = "MUTUAL"
-            elif "CAJA DE COMPENSACION" in texto_upper or "LOS HEROES" in texto_upper or "LOS ANDES" in texto_upper:
-                contexto = "CAJA"
-
-            for line in text.split('\n'):
-                m_rut = re.search(r'\b(\d{1,2}\.\d{3}\.\d{3}\-[0-9Kk])\b', line)
-                if not m_rut: continue
-                rut = m_rut.group(1).upper()
-                if rut in ruts_empresa: continue
-                if rut not in data:
-                    data[rut] = {
-                        'RUT': rut, 'Nombre PDF': '', 'AFP': '', 'Salud': '', 
-                        'Renta Seguro Social': 0, 'Monto Seguro Social': 0, 
-                        'Renta AFP': 0, 'Cotizacion AFP': 0, 'SIS AFP': 0, 'APVI': 0, 
-                        'Renta AFC': 0, 'AFC Afiliado': 0, 'AFC Empleador': 0, 
-                        'Renta Salud': 0, 'Cotizacion Salud': 0, 
-                        'Renta Mutual': 0, 'Cotizacion Mutual': 0, 
-                        'Renta Caja Isapre': 0, 'Renta Caja No Isapre': 0, 'Cotizacion Caja': 0,
-                        '_Renta_Caja_Base': 0
-                    }
-                idx = line.find(rut) + len(rut)
-                resto = line[idx:].strip()
-                m_name = re.match(r'^([A-ZÑÁÉÍÓÚ\s]+)', resto)
-                if m_name:
-                    name = m_name.group(1).strip()
-                    name = re.sub(r'\s+AFP$', '', name) 
-                    name = re.sub(r'\s+JC$', '', name)  
-                    if len(name) > len(data[rut]['Nombre PDF']):
-                        data[rut]['Nombre PDF'] = name
-                numeros = re.findall(r'\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b', resto)
-                num_puros = [int(n.replace('.', '')) for n in numeros]
-                monetary_gt1000 = [n for n in num_puros if n > 1000]
-                if not num_puros: continue
-
-                if contexto == "SEGURO":
-                    if monetary_gt1000: data[rut]['Renta Seguro Social'] = monetary_gt1000[0]
-                    if len(monetary_gt1000) >= 2: data[rut]['Monto Seguro Social'] = monetary_gt1000[1]
-                elif contexto == "AFP":
-                    data[rut]['AFP'] = current_afp
-                    if len(monetary_gt1000) >= 1: data[rut]['Renta AFP'] = monetary_gt1000[0]
-                    if len(monetary_gt1000) >= 2: data[rut]['Cotizacion AFP'] = monetary_gt1000[1]
-                    if len(monetary_gt1000) >= 3: data[rut]['SIS AFP'] = monetary_gt1000[2]
-                    if len(monetary_gt1000) >= 5:
-                        data[rut]['Renta AFC'] = monetary_gt1000[3]
-                        data[rut]['AFC Empleador'] = monetary_gt1000[4]
-                        data[rut]['AFC Afiliado'] = 0
-                    elif len(monetary_gt1000) >= 4:
-                        data[rut]['Renta AFC'] = monetary_gt1000[0]
-                        data[rut]['AFC Empleador'] = monetary_gt1000[-1]
-                elif contexto == "FONASA":
-                    data[rut]['Salud'] = 'FONASA'
-                    if monetary_gt1000: data[rut]['Renta Salud'] = monetary_gt1000[0]
-                    if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Salud'] = monetary_gt1000[1]
-                elif "ISAPRE" in contexto:
-                    data[rut]['Salud'] = contexto
-                    if monetary_gt1000: data[rut]['Renta Salud'] = monetary_gt1000[0]
-                    if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Salud'] = monetary_gt1000[1]
-                elif contexto == "MUTUAL":
-                    if monetary_gt1000: data[rut]['Renta Mutual'] = monetary_gt1000[0]
-                    if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Mutual'] = monetary_gt1000[1]
-                elif contexto == "CAJA":
-                    if monetary_gt1000: data[rut]['_Renta_Caja_Base'] = monetary_gt1000[0]
-                    if len(monetary_gt1000) >= 2: data[rut]['Cotizacion Caja'] = monetary_gt1000[1]
-
-        for rut, row in data.items():
-            if "ISAPRE" in str(row['Salud']).upper():
-                row['Renta Caja Isapre'] = row['_Renta_Caja_Base']
-            else:
-                row['Renta Caja No Isapre'] = row['_Renta_Caja_Base']
-        return list(data.values())
-
-    def extraer_certificado_previred(text):
-        data = {}
-        bloques = re.split(r'Que,\s+las\s+cotizaciones\s+previsionales\s+del\s+Sr\.\(a\)', text, flags=re.IGNORECASE)
-        for bloque in bloques[1:]:
-            match_info = re.search(r'(.+?),\s+Rut:\s+([\d\.\-kK]+)', bloque)
-            if not match_info: continue
-            nombre = match_info.group(1).strip()
-            rut = match_info.group(2).strip().upper()
-            if rut not in data:
-                 data[rut] = {
-                        'RUT': rut, 'Nombre PDF': nombre, 'AFP': '', 'Salud': '', 
-                        'Renta Seguro Social': 0, 'Monto Seguro Social': 0, 
-                        'Renta AFP': 0, 'Cotizacion AFP': 0, 'SIS AFP': 0, 'APVI': 0, 
-                        'Renta AFC': 0, 'AFC Afiliado': 0, 'AFC Empleador': 0, 
-                        'Renta Salud': 0, 'Cotizacion Salud': 0, 
-                        'Renta Mutual': 0, 'Cotizacion Mutual': 0, 
-                        'Renta Caja Isapre': 0, 'Renta Caja No Isapre': 0, 'Cotizacion Caja': 0
-                    }
-            record = data[rut]
-            filas = re.findall(r'([A-Z\s\(\)\.\-]+?)\s+(Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre)\s+(\d{4})\s+(REM|GRA|RET|LEY|COM)\s+\$([\d\.]+)\s+\$([\d\.]+)', bloque)
-            for f in filas:
-                institucion = f[0].strip().upper()
-                imponible = int(f[4].replace('.', ''))
-                monto = int(f[5].replace('.', ''))
-                if "SEGURO SOCIAL" in institucion:
-                    record['Renta Seguro Social'] = imponible
-                    record['Monto Seguro Social'] = monto
-                elif "OBLIGATORIA" in institucion:
-                    record['AFP'] = "AFP " + institucion.replace("(COTIZACION OBLIGATORIA)", "").strip()
-                    record['Renta AFP'] = imponible
-                    record['Cotizacion AFP'] = monto
-                elif "(SIS)" in institucion:
-                    record['SIS AFP'] = monto
-                elif "APVI" in institucion:
-                    record['APVI'] = monto
-                elif "(AFC)" in institucion:
-                    record['Renta AFC'] = imponible
-                    record['AFC Empleador'] = monto
-                elif any(x in institucion for x in ["FONASA", "ISAPRE", "MASVIDA", "CRUZ BLANCA", "CONSALUD", "COLMENA", "BANMEDICA"]):
-                    record['Salud'] = institucion
-                    record['Renta Salud'] = imponible
-                    record['Cotizacion Salud'] = monto
-                elif any(x in institucion for x in ["MUTUAL", "ACHS", "IST", "ISL"]):
-                    record['Renta Mutual'] = imponible
-                    record['Cotizacion Mutual'] = monto
-                elif any(x in institucion for x in ["CAJA", "HEROES", "ANDES"]):
-                    record['Cotizacion Caja'] = monto
-                    if "ISAPRE" in record['Salud']:
-                        record['Renta Caja Isapre'] = imponible
-                    else:
-                        record['Renta Caja No Isapre'] = imponible
-        return list(data.values())
-
-    def generar_excel_formato_previred(df):
-        columnas_plantilla = [
-            'RUT', 'Nombre PDF', 'AFP', 'Salud', 'Renta Seguro Social', 'Monto Seguro Social', 
-            'Renta AFP', 'Cotizacion AFP', 'SIS AFP', 'APVI', 'Renta AFC', 'AFC Afiliado', 
-            'AFC Empleador', 'Renta Salud', 'Cotizacion Salud', 'Renta Mutual', 
-            'Cotizacion Mutual', 'Renta Caja Isapre', 'Renta Caja No Isapre', 'Cotizacion Caja'
-        ]
-        for col in columnas_plantilla:
-            if col not in df.columns: df[col] = 0
-        df = df[columnas_plantilla]
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Previred_Report')
-        return output.getvalue()
+    uploaded_previred = st.file_uploader("Sube el PDF de Previred (Planilla Larga o Certificado)", type=['pdf'], key="up_prev_vopt")
 
     if uploaded_previred is not None:
-        if st.button("🚀 Extraer Datos y Generar Excel Corporativo", key="btn_ext_prev_vfinal"):
-            with st.spinner('Extrayendo datos directos del documento...'):
+        # Leemos los bytes del archivo de una vez para poder pasarlos por la caché
+        pdf_bytes = uploaded_previred.getvalue()
+        
+        if st.button("🚀 Extraer Datos y Generar Excel Corporativo", key="btn_ext_prev_opt"):
+            with st.spinner('Procesando documento a alta velocidad...'):
                 try:
-                    datos_previred = procesar_pdf_previred(uploaded_previred)
+                    # Usamos la función optimizada
+                    datos_previred = procesar_pdf_previred(pdf_bytes)
+                    
                     if not datos_previred:
                         st.error("No se detectaron trabajadores en el PDF.")
                     else:
                         df_previred = pd.DataFrame(datos_previred)
-                        st.success(f"¡Extracción exitosa! {len(df_previred)} trabajadores procesados.")
+                        st.success(f"¡Extracción ultrarrápida exitosa! {len(df_previred)} trabajadores procesados.")
                         st.dataframe(df_previred[['RUT', 'Nombre PDF', 'Renta AFC', 'AFC Afiliado', 'AFC Empleador']].head(10), use_container_width=True)
                         
+                        # Usamos la generación de Excel optimizada
                         excel_data = generar_excel_formato_previred(df_previred)
                         st.download_button(
                             label="📥 Descargar Excel Corporativo SEYSES",
@@ -444,9 +454,9 @@ elif seccion == "📊 Control Nómina & SEYSES":
 
     c_a, c_b = st.columns(2)
     with c_a:
-        f_nom = st.file_uploader("1. Nómina mensual vigente (.xlsx)", type=['xlsx','xls'], key="f_n_vf")
+        f_nom = st.file_uploader("1. Nómina mensual vigente (.xlsx)", type=['xlsx','xls'], key="f_n_vopt")
     with c_b:
-        f_acc = st.file_uploader("2. Control de accesos (.xlsx)", type=['xlsx','xls'], key="f_a_vf")
+        f_acc = st.file_uploader("2. Control de accesos (.xlsx)", type=['xlsx','xls'], key="f_a_vopt")
 
     st.subheader("📋 Matriz de Cruce y Consistencia SEYSES")
     df_conciliacion = st.session_state.db_trabajadores[['RUT', 'Nombre', 'Nomina', 'Accesos', 'SEYSES', 'Estado']]
@@ -522,7 +532,7 @@ elif seccion == "👤 Gestión de Usuarios":
     tab_create, tab_list = st.tabs(["➕ Crear Nuevo Usuario", "📋 Usuarios y Permisos"])
 
     with tab_create:
-        with st.form("form_create_user_pro_vf"):
+        with st.form("form_create_user_pro_vopt"):
             nu = st.text_input("Usuario", placeholder="ej: jperez")
             np = st.text_input("Contraseña temporal", type="password")
             ne = st.text_input("Correo electrónico", placeholder="correo@seyses.com")
