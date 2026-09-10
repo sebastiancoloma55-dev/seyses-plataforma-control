@@ -60,7 +60,7 @@ if 'db_trabajadores' not in st.session_state:
     ])
 
 # ==========================================
-# ESTILOS CSS ADAPTABLES Y CORPORATIVOS
+# ESTILOS CSS ADAPTABLES Y CORPORATIVOS (Cargadores de Archivos Corregidos)
 # ==========================================
 st.markdown("""
 <style>
@@ -108,8 +108,34 @@ st.markdown("""
         border-color: #0f4399 !important;
     }
     
-    /* Inputs limpios */
+    /* Inputs de texto limpios */
     input { background-color: #f8fafc !important; color: #0f172a !important; border-radius: 6px !important; }
+
+    /* 🔴 CORRECCIÓN: ESTILO PARA CARGADORES DE ARCHIVOS Y TEXTOS */
+    div[data-testid="stFileUploader"] {
+        background-color: #14213d !important;
+        border: 1px dashed #4ea8de !important;
+        border-radius: 10px !important;
+        padding: 15px !important;
+    }
+    div[data-testid="stFileUploader"] section {
+        background-color: transparent !important;
+    }
+    div[data-testid="stFileUploader"] button {
+        background-color: #1357c7 !important;
+        color: white !important;
+        border-radius: 6px !important;
+        border: none !important;
+    }
+    div[data-testid="stFileUploader"] small {
+        color: #94a3b8 !important; /* Texto de 200MB */
+    }
+    /* Hacer el texto de las etiquetas (labels) brillante para que se lea sobre fondo oscuro */
+    .st-emotion-cache-10trblm, label[data-testid="stWidgetLabel"] p {
+        color: #e2e8f0 !important;
+        font-weight: 600 !important;
+        font-size: 14px !important;
+    }
 
     /* Tarjetas Dashboard */
     .metric-card {
@@ -347,7 +373,7 @@ if not st.session_state.logged_in:
                     st.error("Usuario no encontrado.")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # 🌟 FIRMA DE CREADORA EN EL LOGIN (OPCIONAL)
+    # 🌟 FIRMA DE CREADORA EN EL LOGIN
     st.markdown('<p style="text-align: center; color: #64748b; font-size: 12px; margin-top: 30px;">Desarrollado y Creado por <b>Yazmyn Canales</b></p>', unsafe_allow_html=True)
     st.stop()
 
@@ -406,7 +432,7 @@ if seccion == "🏠 Dashboard Principal":
         """, unsafe_allow_html=True)
 
 # =========================================================================
-# 2. 📄 EXTRACTOR PREVIRED (AHORA OPTIMIZADO CON CACHÉ)
+# 2. 📄 EXTRACTOR PREVIRED
 # =========================================================================
 elif seccion == "📄 Extractor Previred":
     st.markdown('<div class="main-header">📄 Extractor y Formateador Previred</div>', unsafe_allow_html=True)
@@ -416,15 +442,12 @@ elif seccion == "📄 Extractor Previred":
     uploaded_previred = st.file_uploader("Sube el PDF de Previred (Planilla Larga o Certificado)", type=['pdf'], key="up_prev_vopt")
 
     if uploaded_previred is not None:
-        # Leemos los bytes del archivo de una vez para poder pasarlos por la caché
         pdf_bytes = uploaded_previred.getvalue()
         
         if st.button("🚀 Extraer Datos y Generar Excel Corporativo", key="btn_ext_prev_opt"):
             with st.spinner('Procesando documento a alta velocidad...'):
                 try:
-                    # Usamos la función optimizada
                     datos_previred = procesar_pdf_previred(pdf_bytes)
-                    
                     if not datos_previred:
                         st.error("No se detectaron trabajadores en el PDF.")
                     else:
@@ -432,7 +455,6 @@ elif seccion == "📄 Extractor Previred":
                         st.success(f"¡Extracción ultrarrápida exitosa! {len(df_previred)} trabajadores procesados.")
                         st.dataframe(df_previred[['RUT', 'Nombre PDF', 'Renta AFC', 'AFC Afiliado', 'AFC Empleador']].head(10), use_container_width=True)
                         
-                        # Usamos la generación de Excel optimizada
                         excel_data = generar_excel_formato_previred(df_previred)
                         st.download_button(
                             label="📥 Descargar Excel Corporativo SEYSES",
