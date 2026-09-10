@@ -8,7 +8,7 @@ from pypdf import PdfReader
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
 # ==========================================
-st.set_page_config(page_title="Plataforma de Control Integral · SEYSES", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="Control Integral · SEYSES", page_icon="🌸", layout="wide")
 
 # ==========================================
 # INICIALIZACIÓN DE ESTADOS DE SESIÓN
@@ -60,109 +60,114 @@ if 'db_trabajadores' not in st.session_state:
     ])
 
 # ==========================================
-# ESTILOS CSS ADAPTABLES Y CORPORATIVOS (Cargadores de Archivos Corregidos)
+# ESTILOS CSS - TONALIDADES PASTELES
 # ==========================================
 st.markdown("""
 <style>
-    /* Fondo principal modo corporativo SEYSES */
-    .stApp { background-color: #0c1624; color: #f1faee; }
+    /* Fondo principal: Blanco/Gris muy suave y cálido */
+    .stApp { background-color: #fcfcfd; color: #4a4e69; }
     
-    /* Contenedor del Login Profesional */
+    /* Contenedor del Login Profesional en Pastel */
     .login-container {
-        background: #14213d;
-        border: 1px solid #1f3152;
-        border-radius: 16px;
+        background: #ffffff;
+        border: 1px solid #f1e3e4;
+        border-radius: 20px;
         padding: 45px 40px;
-        box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+        box-shadow: 0 15px 35px rgba(162, 210, 255, 0.15);
         max-width: 450px;
         margin: 40px auto;
-        color: #ffffff;
+        color: #4a4e69;
     }
     
-    /* Botón Iniciar Sesión Blanco y Azul */
+    /* Botón Iniciar Sesión (Azul Pastel con texto oscuro) */
     div[data-testid="stFormSubmitButton"] > button,
     div[data-testid="baseButton-secondaryFormSubmit"] > button,
     .stButton > button {
-        background-color: #1357c7 !important;
-        border: 1px solid #1357c7 !important;
-        color: white !important;
-        border-radius: 8px !important;
+        background-color: #bde0fe !important;
+        border: 1px solid #a2d2ff !important;
+        color: #2b2d42 !important;
+        border-radius: 10px !important;
         padding: 10px 24px !important;
+        box-shadow: 0 4px 6px rgba(189, 224, 254, 0.4) !important;
+        transition: all 0.3s ease !important;
     }
     
     div[data-testid="stFormSubmitButton"] > button span,
     div[data-testid="stFormSubmitButton"] > button p,
-    div[data-testid="stFormSubmitButton"] > button div,
     .stButton > button span,
     .stButton > button p {
-        color: white !important;
+        color: #2b2d42 !important;
         font-weight: 800 !important;
         visibility: visible !important;
-        opacity: 1 !important;
         display: block !important;
     }
 
     div[data-testid="stFormSubmitButton"] > button:hover,
     .stButton > button:hover {
-        background-color: #0f4399 !important;
-        border-color: #0f4399 !important;
+        background-color: #ffc8dd !important; /* Rosa pastel al pasar el mouse */
+        border-color: #ffafcc !important;
+        transform: translateY(-2px);
     }
     
     /* Inputs de texto limpios */
-    input { background-color: #f8fafc !important; color: #0f172a !important; border-radius: 6px !important; }
+    input { 
+        background-color: #f8f9fa !important; 
+        color: #4a4e69 !important; 
+        border-radius: 8px !important; 
+        border: 1px solid #e2e8f0 !important; 
+    }
+    input::placeholder { color: #adb5bd !important; }
 
-    /* 🔴 CORRECCIÓN: ESTILO PARA CARGADORES DE ARCHIVOS Y TEXTOS */
+    /* Estilo para los cargadores de archivos (File Uploaders) en tonos pasteles */
     div[data-testid="stFileUploader"] {
-        background-color: #14213d !important;
-        border: 1px dashed #4ea8de !important;
-        border-radius: 10px !important;
+        background-color: #ffffff !important;
+        border: 2px dashed #bde0fe !important;
+        border-radius: 12px !important;
         padding: 15px !important;
     }
-    div[data-testid="stFileUploader"] section {
-        background-color: transparent !important;
-    }
     div[data-testid="stFileUploader"] button {
-        background-color: #1357c7 !important;
+        background-color: #cdb4db !important; /* Morado pastel */
         color: white !important;
-        border-radius: 6px !important;
+        border-radius: 8px !important;
         border: none !important;
+        font-weight: bold !important;
     }
-    div[data-testid="stFileUploader"] small {
-        color: #94a3b8 !important; /* Texto de 200MB */
+    div[data-testid="stFileUploader"] small, div[data-testid="stFileUploader"] div {
+        color: #9a8c98 !important; 
     }
-    /* Hacer el texto de las etiquetas (labels) brillante para que se lea sobre fondo oscuro */
     .st-emotion-cache-10trblm, label[data-testid="stWidgetLabel"] p {
-        color: #e2e8f0 !important;
-        font-weight: 600 !important;
+        color: #4a4e69 !important;
+        font-weight: 700 !important;
         font-size: 14px !important;
     }
 
     /* Tarjetas Dashboard */
     .metric-card {
-        background: #14213d;
-        border: 1px solid #1f3152;
-        border-radius: 14px;
+        background: #ffffff;
+        border: 1px solid #f1e3e4;
+        border-radius: 16px;
         padding: 20px;
         text-align: center;
-        box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+        box-shadow: 0 8px 16px rgba(162, 210, 255, 0.1);
     }
-    .metric-number { font-size: 28px; font-weight: 900; color: #4ea8de; }
-    .metric-label { font-size: 12px; color: #94a3b8; font-weight: 700; text-transform: uppercase; margin-top: 5px; }
+    .metric-number { font-size: 32px; font-weight: 900; color: #a2d2ff; } /* Azul pastel fuerte */
+    .metric-label { font-size: 12px; color: #9a8c98; font-weight: 700; text-transform: uppercase; margin-top: 5px; }
 
-    .main-header { font-size: 26px; font-weight: 800; color: #ffffff; margin-bottom: 5px; }
-    .sub-header { font-size: 14px; color: #94a3b8; margin-bottom: 25px; }
+    /* Textos generales */
+    .main-header { font-size: 28px; font-weight: 800; color: #4a4e69; margin-bottom: 5px; }
+    .sub-header { font-size: 15px; color: #9a8c98; margin-bottom: 25px; }
 </style>
 """, unsafe_allow_html=True)
 
 logo_seyses_oficial = """
 <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; margin-bottom: 30px;">
-    <span style="font-size: 38px; font-weight: 900; color: #ffffff; letter-spacing: -1.5px; font-family: 'Arial', sans-serif;">SEYSES</span>
-    <span style="font-size: 11px; color: #4ea8de; letter-spacing: 2.5px; text-transform: uppercase; margin-top: 2px;">Personas | Procesos | Resultados</span>
+    <span style="font-size: 40px; font-weight: 900; color: #4a4e69; letter-spacing: -1.5px; font-family: 'Arial', sans-serif;">SEYSES</span>
+    <span style="font-size: 12px; color: #a2d2ff; letter-spacing: 2.5px; text-transform: uppercase; margin-top: 2px; font-weight: bold;">Personas | Procesos | Resultados</span>
 </div>
 """
 
 # ==========================================
-# FUNCIONES OPTIMIZADAS CON CACHÉ DE MEMORIA
+# FUNCIONES OPTIMIZADAS CON CACHÉ
 # ==========================================
 @st.cache_data(show_spinner=False)
 def procesar_pdf_previred(pdf_bytes):
@@ -348,8 +353,8 @@ if not st.session_state.logged_in:
     with col_c:
         st.markdown('<div class="login-container">', unsafe_allow_html=True)
         st.markdown(logo_seyses_oficial, unsafe_allow_html=True)
-        st.markdown('<h3 style="text-align: center; color: #ffffff; font-weight: 800; margin-bottom: 5px;">Iniciar sesión</h3>', unsafe_allow_html=True)
-        st.markdown('<p style="text-align: center; color: #94a3b8; font-size: 13px; margin-bottom: 25px;">Ingresa tus credenciales corporativas</p>', unsafe_allow_html=True)
+        st.markdown('<h3 style="text-align: center; color: #4a4e69; font-weight: 800; margin-bottom: 5px;">Iniciar sesión</h3>', unsafe_allow_html=True)
+        st.markdown('<p style="text-align: center; color: #9a8c98; font-size: 13px; margin-bottom: 25px;">Ingresa tus credenciales corporativas</p>', unsafe_allow_html=True)
         
         with st.form("form_login_definitivo"):
             user_input = st.text_input("Usuario", placeholder="ej: admin")
@@ -373,15 +378,15 @@ if not st.session_state.logged_in:
                     st.error("Usuario no encontrado.")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # 🌟 FIRMA DE CREADORA EN EL LOGIN
-    st.markdown('<p style="text-align: center; color: #64748b; font-size: 12px; margin-top: 30px;">Desarrollado y Creado por <b>Yazmyn Canales</b></p>', unsafe_allow_html=True)
+    # 🌟 FIRMA DE CREADORA EN EL LOGIN 🌟
+    st.markdown('<p style="text-align: center; color: #9a8c98; font-size: 13px; margin-top: 30px;">Desarrollado y Creado por <b style="color: #4a4e69;">Yazmyn Canales</b></p>', unsafe_allow_html=True)
     st.stop()
 
 # ==========================================
 # APLICACIÓN PRINCIPAL (AUTENTICADO)
 # ==========================================
 st.sidebar.markdown(logo_seyses_oficial, unsafe_allow_html=True)
-st.sidebar.markdown(f'<p style="font-size: 12px; color: #94a3b8; text-align:center; margin-bottom: 20px;">Usuario: <b>{st.session_state.current_user}</b><br>Rol: <b>{st.session_state.current_role}</b></p>', unsafe_allow_html=True)
+st.sidebar.markdown(f'<p style="font-size: 13px; color: #9a8c98; text-align:center; margin-bottom: 20px;">Usuario: <b>{st.session_state.current_user}</b><br>Rol: <b>{st.session_state.current_role}</b></p>', unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 menu_opciones = ["🏠 Dashboard Principal", "📄 Extractor Previred", "📊 Control Nómina & SEYSES", "🚨 Centro de Diferencias", "🔎 Buscador Global", "📁 Historial de Procesos", "🛡️ Auditoría", "👤 Gestión de Usuarios"]
@@ -393,8 +398,8 @@ if st.sidebar.button("🚪 Cerrar sesión", use_container_width=True):
     st.session_state.logged_in = False
     st.rerun()
 
-# 🌟 FIRMA DE CREADORA EN EL SIDEBAR
-st.sidebar.markdown('<div style="margin-top: 40px; text-align: center; color: #475569; font-size: 11px; padding: 10px; border-top: 1px solid #1f3152;">Desarrollado y Creado por<br><b style="color: #94a3b8; font-size: 12px;">Yazmyn Canales</b></div>', unsafe_allow_html=True)
+# 🌟 FIRMA DE CREADORA EN EL SIDEBAR 🌟
+st.sidebar.markdown('<div style="margin-top: 40px; text-align: center; color: #9a8c98; font-size: 12px; padding: 15px; border-top: 1px dashed #bde0fe;">Desarrollado y Creado por<br><b style="color: #4a4e69; font-size: 14px;">Yazmyn Canales</b></div>', unsafe_allow_html=True)
 
 # =========================================================================
 # 1. 🏠 DASHBOARD PRINCIPAL
@@ -406,13 +411,13 @@ if seccion == "🏠 Dashboard Principal":
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown('<div class="metric-card"><div class="metric-number">1.284</div><div class="metric-label">Personas Procesadas</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="metric-card"><div class="metric-number" style="color: #a2d2ff;">1.284</div><div class="metric-label">Personas Procesadas</div></div>', unsafe_allow_html=True)
     with c2:
-        st.markdown('<div class="metric-card"><div class="metric-number" style="color:#ef4444;">37</div><div class="metric-label">Diferencias Detectadas</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="metric-card"><div class="metric-number" style="color: #ffb5a7;">37</div><div class="metric-label">Diferencias Detectadas</div></div>', unsafe_allow_html=True)
     with c3:
-        st.markdown('<div class="metric-card"><div class="metric-number" style="color:#f59e0b;">12</div><div class="metric-label">Alertas Activas</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="metric-card"><div class="metric-number" style="color: #f4a261;">12</div><div class="metric-label">Alertas Activas</div></div>', unsafe_allow_html=True)
     with c4:
-        st.markdown('<div class="metric-card"><div class="metric-number" style="color:#10b981;">98%</div><div class="metric-label">Control Efectivo</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="metric-card"><div class="metric-number" style="color: #81b29a;">98%</div><div class="metric-label">Control Efectivo</div></div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -426,9 +431,9 @@ if seccion == "🏠 Dashboard Principal":
     with col_right:
         st.subheader("🚨 Últimas Diferencias Registradas")
         st.markdown("""
-        * **Juan Pérez** — Diferencia de acceso <span style="color:#ef4444; float:right;">🔴</span>
-        * **María Soto** — Diferencia SEYSES <span style="color:#f59e0b; float:right;">🟠</span>
-        * **Pedro Díaz** — Sin registro en nómina <span style="color:#ef4444; float:right;">🔴</span>
+        * **Juan Pérez** — Diferencia de acceso <span style="color:#ffb5a7; float:right; font-weight: bold;">[Revisar]</span>
+        * **María Soto** — Diferencia SEYSES <span style="color:#f4a261; float:right; font-weight: bold;">[Alerta]</span>
+        * **Pedro Díaz** — Sin registro en nómina <span style="color:#ffb5a7; float:right; font-weight: bold;">[Revisar]</span>
         """, unsafe_allow_html=True)
 
 # =========================================================================
