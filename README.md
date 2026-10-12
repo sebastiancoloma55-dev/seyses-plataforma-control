@@ -2,6 +2,10 @@
 
 Aplicación Streamlit conectada a Supabase para gestión de trabajadores, procesos, diferencias, archivos y auditoría.
 
+## Versión web para Vercel
+
+La rama `feat/vercel-nextjs-adaptacion` incluye una interfaz web inicial en Next.js para generar un deployment de vista previa en Vercel, manteniendo Supabase como backend. Consulta `VERCEL_DEPLOYMENT.md` para las variables de entorno y los pasos de configuración. Esta interfaz web todavía no sustituye todos los flujos Python: el extractor Previred y la conciliación deben migrarse y validarse antes de declarar paridad funcional o usar datos productivos.
+
 ## Mejoras de interfaz incluidas
 - Diseño responsive con navegación lateral y jerarquía visual corporativa.
 - Panel ejecutivo con indicadores consultados desde Supabase.
@@ -42,4 +46,4 @@ GitHub Actions compila los módulos Python y ejecuta pruebas unitarias del motor
 - La aplicación no debe considerarse lista para datos productivos hasta validar permisos, auditoría y flujos de importación.
 
 ## Despliegue
-Supabase aporta autenticación y base de datos, pero no aloja directamente la interfaz Streamlit. La aplicación todavía necesita un hosting compatible con Python para disponer de una URL pública.
+Supabase aporta autenticación y base de datos, pero no aloja directamente la interfaz Streamlit. La aplicación original necesita un hosting compatible con Python; la interfaz Next.js de vista previa está documentada en `VERCEL_DEPLOYMENT.md`.
