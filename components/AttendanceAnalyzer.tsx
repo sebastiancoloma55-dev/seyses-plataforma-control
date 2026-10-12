@@ -285,10 +285,15 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     const actualStart = asTime(value("actual_start"));
     const actualEnd = asTime(value("actual_end"));
     const breakMins = mapping.break_duration ? (parseDuration(value("break_duration")) ?? parseTimeMinutes(value("break_duration")) ?? 0) : 0;
-    const scheduled = plannedStart && plannedEnd ? Math.max(0,durationBetween(plannedStart,plannedEnd)-breakMins) : 0;
+    const rawScheduled = mapping.scheduled_duration ? parseDuration(value("scheduled_duration")) : null;
+    const scheduled = rawScheduled !== null ? rawScheduled : (plannedStart && plannedEnd ? Math.max(0,durationBetween(plannedStart,plannedEnd)-breakMins) : 0);
     const rawWorked = mapping.worked_duration ? parseDuration(value("worked_duration")) : null;
     const worked = rawWorked !== null ? rawWorked : (actualStart && actualEnd ? Math.max(0,durationBetween(actualStart,actualEnd)-breakMins) : 0);
-    const rawOvertime = mapping.overtime_duration ? parseDuration(value("overtime_duration")) : null;
+    const overtimePrimary = mapping.overtime_duration ? (parseDuration(value("overtime_duration")) ?? 0) : 0;
+    const overtimeSecondary = mapping.overtime_duration_secondary ? (parseDuration(value("overtime_duration_secondary")) ?? 0) : 0;
+    const rawOvertime = mapping.overtime_duration || mapping.overtime_duration_secondary ? overtimePrimary + overtimeSecondary : null;
+    const contractHoursRaw = mapping.contract_hours_weekly ? Number(text(value("contract_hours_weekly")).replace(",", ".")) : 0;
+    const contractHours = Number.isFinite(contractHoursRaw) ? contractHoursRaw : 0;
     const startDelta = plannedStart && actualStart ? (parseTimeMinutes(actualStart) ?? 0)-(parseTimeMinutes(plannedStart) ?? 0) : 0;
     const normalizedLate = startDelta < -720 ? startDelta + 1440 : startDelta > 720 ? startDelta - 1440 : startDelta;
     const late = plannedStart && actualStart ? Math.max(0,normalizedLate) : 0;
@@ -299,6 +304,11 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
       worker_rut:rut,
       worker_name:name || workerKey,
       branch:text(value("branch")),
+      job_title:text(value("job_title")),
+      supervisor:text(value("supervisor")),
+      contract_hours_weekly:contractHours,
+      on_payroll:text(value("on_payroll")),
+      permission_note:text(value("permission_note")),
       work_date:date,
       shift_name:text(value("shift_name")),
       scheduled_start:plannedStart,
@@ -340,19 +350,38 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         file_size_bytes:file.size,
         format:file.name.split(".").pop()?.toLowerCase(),
         rows_total:rawRows.length,
+        rows_valid:mapped.length,
         rows_rejected:invalidRows,
-        metadata:{ format:file.name.split(".").pop()?.toLowerCase(), mapping, columns:headers, imported_by:userId, filtered_to_period:true }
+        metadata:{ format:file.name.split(".").pop()?.toLowerCase(), mapping, columns:headers, imported_by:userId, filtered_to_period:true, chunk_size:2000 }
       };
-      const {data,error:rpcError} = await getSupabase().rpc("seyses_save_attendance_report",{
-        p_import:payload,
-        p_records:mapped,
-        p_replace_existing:replaceExisting
-      });
-      if (rpcError) throw rpcError;
-      const result = data as {id?:string;duplicate?:boolean;records_saved?:number};
-      setNotice(result?.duplicate
-        ? `Este archivo ya estaba cargado. No se duplicaron registros (reporte ${result.id ?? ""}).`
-        : `Importación guardada correctamente: ${result?.records_saved ?? mapped.length} filas normalizadas · ${grouped.length} trabajadores · ${erpName} · ${periodStart} a ${periodEnd}.`);
+      let importId: string | null = null;
+      let lastResult: {id?:string;duplicate?:boolean;records_saved?:number;records_total?:number;resumed?:boolean;status?:string}|null = null;
+      const batchSize = 2000;
+      const batches = Math.ceil(mapped.length / batchSize);
+      for (let batch=0; batch<batches; batch++) {
+        const start = batch*batchSize;
+        const records = mapped.slice(start,start+batchSize);
+        const {data,error:rpcError} = await getSupabase().rpc("seyses_save_attendance_report_batch",{
+          p_import:payload,
+          p_records:records,
+          p_replace_existing:replaceExisting && batch===0,
+          p_import_id:importId,
+          p_final:batch===batches-1
+        });
+        if (rpcError) throw new Error(`Lote ${batch+1}/${batches}: ${rpcError.message}`);
+        const result = data as {id?:string;duplicate?:boolean;records_saved?:number;records_total?:number;resumed?:boolean;status?:string};
+        lastResult=result;
+        if (result?.duplicate) {
+          setNotice(`Este archivo ya estaba cargado; no se duplicaron registros (${result.records_total ?? result.records_saved ?? 0} filas, reporte ${result.id ?? ""}).`);
+          await loadImports();
+          return;
+        }
+        if (result?.id) importId=result.id;
+        setNotice(`Importando lote ${batch+1} de ${batches} · ${Math.min(start+records.length,mapped.length).toLocaleString("es-CL")} de ${mapped.length.toLocaleString("es-CL")} filas…`);
+      }
+      setNotice(lastResult?.resumed
+        ? `Importación reanudada y finalizada: ${lastResult.records_total ?? mapped.length} filas · ${grouped.length} trabajadores · ${erpName} · ${periodStart} al ${periodEnd}.`
+        : `Importación guardada correctamente: ${lastResult?.records_total ?? mapped.length} filas · ${grouped.length} trabajadores · ${erpName} · ${periodStart} al ${periodEnd}.`);
       await loadImports();
     } catch(e) {
       setError(e instanceof Error ? e.message : "No se pudo guardar el reporte. Verifica permisos de importación y vuelve a intentarlo.");
