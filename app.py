@@ -5,6 +5,7 @@ import streamlit as st
 
 from sesyes_supabase import sign_in, sign_out, log_event, get_audit_logs
 from sesyes_imports import read_spreadsheet, reconcile_sources, worker_payloads
+from sesyes_previred import procesar_pdf_previred, generar_excel_formato_previred
 
 st.set_page_config(
     page_title="SEYSES | Centro de control",
@@ -142,7 +143,7 @@ with st.sidebar:
     st.caption(f"Perfil autorizado: {role.upper()}")
     section = st.radio(
         "ESPACIOS DE TRABAJO",
-        ["Resumen ejecutivo", "Importar y conciliar", "Trabajadores", "Procesos", "Diferencias", "Archivos", "Auditoría", "Administración"],
+        ["Resumen ejecutivo", "Extractor Previred", "Importar y conciliar", "Trabajadores", "Procesos", "Diferencias", "Archivos", "Auditoría", "Administración"],
         label_visibility="visible",
     )
     st.divider()
@@ -175,7 +176,75 @@ with top_right:
     st.markdown(f"<div style='text-align:right;color:#77728f;font-size:.8rem;padding-top:1.3rem'>{datetime.now().strftime('%d %b %Y')}<br><b>{datetime.now().strftime('%H:%M')}</b></div>", unsafe_allow_html=True)
 
 
-if section == "Importar y conciliar":
+if section == "Extractor Previred":
+    if role not in ("admin", "operator"):
+        st.error("Tu perfil es de solo lectura. Solicita un perfil operador para ejecutar extracciones.")
+    else:
+        st.markdown("<div class='seyses-panel'><div class='seyses-section'>Extracción de cotizaciones previsionales</div><p style='color:#77728f'>Carga el PDF de Previred. Se extraen los datos disponibles en el texto del documento y se prepara un Excel para revisión. Los PDF escaneados sin texto pueden requerir OCR, que no está habilitado.</p></div>", unsafe_allow_html=True)
+        pdf_file = st.file_uploader("Documento Previred (.pdf)", type=["pdf"], key="seyses_previred_pdf")
+        if pdf_file and st.button("Extraer datos y preparar Excel", type="primary", use_container_width=True):
+            try:
+                pdf_bytes = pdf_file.getvalue()
+                extracted = procesar_pdf_previred(pdf_bytes)
+                if not extracted:
+                    st.warning("No se detectaron trabajadores. Verifica que el PDF contenga texto seleccionable y corresponda a un formato compatible.")
+                    st.session_state.seyses_previred_result = None
+                else:
+                    df_previred = pd.DataFrame(extracted)
+                    excel_bytes = generar_excel_formato_previred(df_previred)
+                    st.session_state.seyses_previred_result = {
+                        "data": df_previred,
+                        "excel": excel_bytes,
+                        "filename": pdf_file.name,
+                        "size": len(pdf_bytes),
+                        "sha256": __import__("hashlib").sha256(pdf_bytes).hexdigest(),
+                        "records": len(df_previred),
+                    }
+                    try:
+                        prior = client.table("process_runs").select("id").contains("metadata", {
+                            "pdf_sha256": st.session_state.seyses_previred_result["sha256"]
+                        }).limit(1).execute()
+                        if not prior.data:
+                            run = client.table("process_runs").insert({
+                                "created_by": user.get("user_id"),
+                                "process_type": "previred_pdf_extraction",
+                                "status": "completed",
+                                "source_filename": pdf_file.name,
+                                "records_read": len(df_previred),
+                                "records_processed": len(df_previred),
+                                "metadata": {"pdf_sha256": st.session_state.seyses_previred_result["sha256"], "file_size_bytes": len(pdf_bytes)},
+                            }).execute()
+                            if run.data:
+                                client.table("processed_files").insert({
+                                    "uploaded_by": user.get("user_id"),
+                                    "process_run_id": run.data[0]["id"],
+                                    "original_filename": pdf_file.name,
+                                    "file_kind": "previred_pdf",
+                                    "content_type": "application/pdf",
+                                    "file_size_bytes": len(pdf_bytes),
+                                    "checksum_sha256": st.session_state.seyses_previred_result["sha256"],
+                                    "status": "processed",
+                                    "metadata": {"records_extracted": len(df_previred), "stored_in_storage": False},
+                                }).execute()
+                        log_event(client, user, "previred_extraction", "Extractor Previred", "success", {"records_extracted": len(df_previred)})
+                    except Exception:
+                        st.warning("La extracción se realizó, pero no se pudo registrar toda la trazabilidad en Supabase. Revisa los permisos y el historial.")
+            except Exception:
+                st.error("No fue posible leer el PDF. Verifica que no esté dañado y que corresponda a un formato compatible.")
+        result = st.session_state.get("seyses_previred_result")
+        if result:
+            st.success(f"Extracción lista: {result['records']} trabajadores detectados.")
+            st.dataframe(result["data"].head(100), use_container_width=True, hide_index=True)
+            st.download_button(
+                "Descargar Excel Previred",
+                data=result["excel"],
+                file_name="Reporte_SEYSES_Previred.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
+            st.caption("La tabla muestra hasta 100 filas. Revisa el Excel descargado antes de usar los montos para procesos de remuneraciones.")
+elif section == "Importar y conciliar":
     if role not in ("admin", "operator"):
         st.error("Tu perfil es de solo lectura. Solicita al administrador un perfil operador para cargar y conciliar archivos.")
     else:
