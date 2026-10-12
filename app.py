@@ -1,4 +1,5 @@
 from datetime import datetime
+import hashlib
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -197,7 +198,7 @@ if section == "Extractor Previred":
                         "excel": excel_bytes,
                         "filename": pdf_file.name,
                         "size": len(pdf_bytes),
-                        "sha256": __import__("hashlib").sha256(pdf_bytes).hexdigest(),
+                        "sha256": hashlib.sha256(pdf_bytes).hexdigest(),
                         "records": len(df_previred),
                     }
                     try:
@@ -209,6 +210,7 @@ if section == "Extractor Previred":
                                 "created_by": user.get("user_id"),
                                 "process_type": "previred_pdf_extraction",
                                 "status": "completed",
+                                "finished_at": datetime.now().astimezone().isoformat(),
                                 "source_filename": pdf_file.name,
                                 "records_read": len(df_previred),
                                 "records_processed": len(df_previred),
@@ -232,7 +234,8 @@ if section == "Extractor Previred":
             except Exception:
                 st.error("No fue posible leer el PDF. Verifica que no esté dañado y que corresponda a un formato compatible.")
         result = st.session_state.get("seyses_previred_result")
-        if result:
+        current_pdf_sha = hashlib.sha256(pdf_file.getvalue()).hexdigest() if pdf_file else None
+        if result and current_pdf_sha == result["sha256"]:
             st.success(f"Extracción lista: {result['records']} trabajadores detectados.")
             st.dataframe(result["data"].head(100), use_container_width=True, hide_index=True)
             st.download_button(
@@ -352,6 +355,7 @@ elif section == "Importar y conciliar":
                     client.table("processed_files").insert(file_payloads).execute()
                     client.table("process_runs").update({
                         "status": "completed",
+                        "finished_at": datetime.now().astimezone().isoformat(),
                         "records_processed": int(len(preview)),
                         "differences_found": int(len(diff_payloads)),
                     }).eq("id", process_id).execute()
