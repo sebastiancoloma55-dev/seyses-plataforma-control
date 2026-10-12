@@ -156,6 +156,11 @@ with st.sidebar:
         finally:
             st.session_state.seyses_user = None
             st.session_state.seyses_client = None
+            for sensitive_key in ("seyses_previred_result", "seyses_reconciliation", "seyses_payroll_upload", "seyses_access_upload", "seyses_previred_pdf"):
+                st.session_state.pop(sensitive_key, None)
+            for session_key in list(st.session_state.keys()):
+                if session_key.startswith("seyses_confirm_"):
+                    st.session_state.pop(session_key, None)
             st.rerun()
 
 top_left, top_right = st.columns([4, 1])
