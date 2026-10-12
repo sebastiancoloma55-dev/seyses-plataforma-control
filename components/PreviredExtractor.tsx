@@ -99,7 +99,7 @@ function parseCertificate(text:string):MutablePreviredRow[] {
       if(institution.includes("SEGURO SOCIAL")) {
         row["Renta Seguro Social"]=base; row["Monto Seguro Social"]=amount;
       } else if(institution.includes("OBLIGATORIA")) {
-        row["AFP"]="AFP "+institution.replace(/\s*\(COTIZACION OBLIGATORIA\)\s*/,"").trim();
+        const afpName=institution.replace(/\s*\(COTIZACION OBLIGATORIA\)\s*/,"").trim(); row["AFP"]=afpName.startsWith("AFP")?afpName:"AFP "+afpName;
         row["Renta AFP"]=base; row["Cotizacion AFP"]=amount;
       } else if(institution.includes("(SIS)")||institution.endsWith(" SIS")) {
         row["SIS AFP"]=amount;
@@ -184,7 +184,14 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
 }
 function parsePrevired(text:string):PreviredRow[] {
   const certificate=/Certificado\s+de\s+Pagos/i.test(text)||/certifica\s*:/i.test(text);
-  const rows=certificate?parseCertificate(text):parsePlanilla(text);
+  const preferred=certificate?parseCertificate(text):parsePlanilla(text);
+  const alternative=certificate?parsePlanilla(text):parseCertificate(text);
+  const score=(rows:MutablePreviredRow[])=>rows.reduce((total,row)=>{
+    const moneyCount=COLUMNS.slice(4).filter(column=>Number(row[column])>0).length;
+    const institutions=(String(row.AFP||"").trim()?1:0)+(String(row.Salud||"").trim()?1:0);
+    return total+moneyCount*3+institutions*2;
+  },0);
+  const rows=score(alternative)>score(preferred)?alternative:preferred;
   return rows.map(row=>{
     const cleaned:PreviredRow={};
     for(const column of COLUMNS)cleaned[column]=row[column]??(["RUT","Nombre PDF","AFP","Salud"].includes(column)?"":0);
