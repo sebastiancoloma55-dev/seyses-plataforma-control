@@ -223,7 +223,8 @@ elif section == "Importar y conciliar":
             st.dataframe(visible, use_container_width=True, hide_index=True)
             st.download_button("Descargar vista previa CSV", visible.to_csv(index=False).encode("utf-8-sig"), "seyses_vista_previa_conciliacion.csv", "text/csv")
             st.caption("Los archivos se procesan en memoria para la vista previa. La confirmación guarda los registros y metadatos de proceso; no se suben los archivos originales a Storage.")
-            confirm = st.checkbox("Confirmo que revisé la vista previa y autorizo guardar los resultados en la base independiente de SEYSES.", key="seyses_confirm_reconciliation")
+            confirm_key = f"seyses_confirm_{state['payroll_meta']['sha256'][:8]}_{state['access_meta']['sha256'][:8]}"
+            confirm = st.checkbox("Confirmo que revisé la vista previa y autorizo guardar los resultados en la base independiente de SEYSES.", key=confirm_key)
             if st.button("Confirmar y guardar en SEYSES", type="primary", disabled=not confirm, use_container_width=True):
                 process_id = None
                 try:
@@ -284,7 +285,6 @@ elif section == "Importar y conciliar":
                     })
                     st.success(f"Conciliación guardada. Personas: {len(preview)} · Diferencias: {len(diff_payloads)}.")
                     st.session_state.seyses_reconciliation = None
-                    st.session_state.seyses_confirm_reconciliation = False
                     st.rerun()
                 except Exception:
                     if process_id:
