@@ -143,6 +143,8 @@ def reconcile_sources(payroll_df: pd.DataFrame, access_df: pd.DataFrame) -> tupl
             "nomina": "Presente" if source != "right_only" else "Ausente",
             "accesos": "Presente" if source != "left_only" else "Ausente",
             "sucursal": _clean_text(row.get("branch_nomina")) or _clean_text(row.get("branch_accesos")),
+            "afp": _clean_text(row.get("afp_nomina")) or _clean_text(row.get("afp_accesos")),
+            "salud": _clean_text(row.get("health_provider_nomina")) or _clean_text(row.get("health_provider_accesos")),
             "categoria": category,
             "descripcion": description,
             "severidad": severity,
@@ -161,6 +163,8 @@ def worker_payloads(df: pd.DataFrame, process_id: str) -> list[dict]:
             "rut": row.get("rut") or None,
             "full_name": _clean_text(row.get("full_name")) or "Nombre no informado",
             "branch": _clean_text(row.get("sucursal")) or None,
+            "afp": _clean_text(row.get("afp")) or None,
+            "health_provider": _clean_text(row.get("salud")) or None,
             "source_process_id": process_id,
             "metadata": {
                 "source": "conciliacion_nomina_accesos",
