@@ -7,7 +7,8 @@ Aplicación Streamlit conectada a Supabase para gestión de trabajadores, proces
 - Panel ejecutivo con indicadores consultados desde Supabase.
 - Gráficos interactivos de tendencia de procesos y distribución de diferencias.
 - Vistas de trabajadores, procesos, diferencias, archivos y auditoría.
-- Flujo de importación y conciliación de Excel para nómina y accesos con vista previa, detección de duplicados, diferencias y confirmación explícita.
+- Extractor PDF de Previred con vista previa y descarga Excel; registra metadatos de trazabilidad sin guardar el PDF original en Storage.
+- Flujo de importación y conciliación de Excel para nómina y accesos con vista previa, detección de RUT inválidos/duplicados, diferencias y confirmación explícita.
 - Registro de proceso, hashes SHA-256 de los archivos fuente y metadatos en Supabase; los archivos originales no se almacenan en Storage en esta etapa.
 - Protección contra la repetición automática de la misma pareja de archivos y clave única de RUT para evitar duplicar trabajadores.
 - Filtros de búsqueda, descarga CSV de resultados y actualización manual.
@@ -15,7 +16,7 @@ Aplicación Streamlit conectada a Supabase para gestión de trabajadores, proces
 - Mensajes de error que evitan mostrar detalles internos de la base de datos.
 
 ## Estado real
-Esta es una versión de avance para revisión, no una declaración de producción lista. El dashboard consulta datos reales disponibles y muestra estados vacíos si todavía no existen registros. La conciliación de nómina y accesos está implementada en la rama de trabajo, pero requiere pasar CI y una prueba funcional autenticada antes de usarse con información real. El extractor PDF de Previred del archivo heredado aún no está integrado al nuevo panel. La carga/descarga de archivos privados mediante Supabase Storage, pruebas completas de autorización por rol, respaldos y despliegue público siguen pendientes.
+Esta es una versión de avance para revisión, no una declaración de producción lista. El dashboard consulta datos reales disponibles y muestra estados vacíos si todavía no existen registros. La conciliación de nómina y accesos está implementada en la rama de trabajo, pero requiere pasar CI y una prueba funcional autenticada antes de usarse con información real. El extractor PDF de Previred ya está disponible en el nuevo panel, pero requiere validación con muestras reales de formatos de Previred; PDF escaneados sin capa de texto pueden necesitar OCR. La carga/descarga de archivos privados mediante Supabase Storage, pruebas completas de autorización por rol, respaldos y despliegue público siguen pendientes.
 
 ## Requisitos
 - Python 3.10+
