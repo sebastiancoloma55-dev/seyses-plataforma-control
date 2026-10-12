@@ -31,7 +31,7 @@ GitHub Actions compila los módulos Python y ejecuta pruebas unitarias del motor
 1. Instala las dependencias: `pip install -r requirements.txt`.
 2. Configura `SUPABASE_URL` y `SUPABASE_KEY` como variables de entorno o en `.streamlit/secrets.toml`.
 3. Crea el usuario en Supabase Authentication.
-4. Crea el perfil con el mismo UUID en `public.user_profiles`, con un rol permitido: `admin`, `operator` o `auditor`.
+4. Para el primer administrador, sigue `supabase/bootstrap_admin.sql.example` en el SQL Editor del proyecto SEYSES; reemplaza el UUID de ejemplo por el UUID real creado en Authentication. Para los siguientes usuarios, un admin puede crear sus perfiles mediante el flujo administrativo documentado.
 5. Ejecuta `streamlit run app.py`.
 
 ## Seguridad
