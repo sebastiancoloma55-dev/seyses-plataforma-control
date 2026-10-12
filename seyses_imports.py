@@ -27,7 +27,9 @@ def normalize_label(value: Any) -> str:
 def normalize_rut(value: Any) -> str:
     if pd.isna(value):
         return ""
-    raw = str(value).strip().upper().replace(".", "").replace(" ", "")
+    raw = str(value).strip().upper().replace(" ", "")
+    raw = re.sub(r"\\.0$", "", raw)
+    raw = raw.replace(".", "")
     raw = raw.replace("—", "-").replace("–", "-")
     raw = re.sub(r"[^0-9K-]", "", raw)
     raw = raw.replace("-", "")
@@ -72,6 +74,12 @@ def find_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
     return None
 
 
+def _clean_text(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
 def prepare_source(df: pd.DataFrame, source_name: str) -> tuple[pd.DataFrame, dict]:
     rut_col = find_column(df, RUT_CANDIDATES)
     name_col = find_column(df, NAME_CANDIDATES)
@@ -82,10 +90,10 @@ def prepare_source(df: pd.DataFrame, source_name: str) -> tuple[pd.DataFrame, di
     health_col = find_column(df, HEALTH_CANDIDATES)
     result = pd.DataFrame()
     result["rut"] = df[rut_col].map(normalize_rut)
-    result["full_name"] = df[name_col].fillna("").astype(str).str.strip() if name_col else ""
-    result["branch"] = df[branch_col].fillna("").astype(str).str.strip() if branch_col else ""
-    result["afp"] = df[afp_col].fillna("").astype(str).str.strip() if afp_col else ""
-    result["health_provider"] = df[health_col].fillna("").astype(str).str.strip() if health_col else ""
+    result["full_name"] = df[name_col].map(_clean_text) if name_col else ""
+    result["branch"] = df[branch_col].map(_clean_text) if branch_col else ""
+    result["afp"] = df[afp_col].map(_clean_text) if afp_col else ""
+    result["health_provider"] = df[health_col].map(_clean_text) if health_col else ""
     result = result[result["rut"] != ""].copy()
     duplicate_mask = result["rut"].duplicated(keep=False)
     duplicates = sorted(result.loc[duplicate_mask, "rut"].unique().tolist())
@@ -93,7 +101,7 @@ def prepare_source(df: pd.DataFrame, source_name: str) -> tuple[pd.DataFrame, di
     return result, {
         "rut_column": rut_col,
         "name_column": name_col,
-        "rows_without_rut": int(len(df) - (result.shape[0] + len(duplicates))),
+        "rows_without_rut": int(df[rut_col].map(normalize_rut).eq("").sum()),
         "duplicate_ruts": duplicates,
         "source_rows": int(len(df)),
         "valid_unique_ruts": int(len(result)),
@@ -108,15 +116,15 @@ def reconcile_sources(payroll_df: pd.DataFrame, access_df: pd.DataFrame) -> tupl
     for _, row in merged.iterrows():
         source = row["_merge"]
         rut = row["rut"]
-        name = str(row.get("full_name_nomina") or row.get("full_name_accesos") or "").strip()
+        name = _clean_text(row.get("full_name_nomina")) or _clean_text(row.get("full_name_accesos"))
         if source == "left_only":
             category, description, severity = "Sin acceso", "Trabajador presente en nómina, pero ausente en el archivo de accesos.", "warning"
         elif source == "right_only":
             category, description, severity = "Fuera de nómina", "Registro presente en accesos, pero ausente en la nómina cargada.", "critical"
         else:
             category, description, severity = "", "", ""
-            nom_name = str(row.get("full_name_nomina") or "").strip()
-            acc_name = str(row.get("full_name_accesos") or "").strip()
+            nom_name = _clean_text(row.get("full_name_nomina"))
+            acc_name = _clean_text(row.get("full_name_accesos"))
             if nom_name and acc_name and normalize_label(nom_name) != normalize_label(acc_name):
                 category, description, severity = "Nombre distinto", "El nombre informado difiere entre nómina y control de accesos.", "warning"
         rows.append({
@@ -124,7 +132,7 @@ def reconcile_sources(payroll_df: pd.DataFrame, access_df: pd.DataFrame) -> tupl
             "full_name": name,
             "nomina": "Presente" if source != "right_only" else "Ausente",
             "accesos": "Presente" if source != "left_only" else "Ausente",
-            "sucursal": str(row.get("branch_nomina") or row.get("branch_accesos") or "").strip(),
+            "sucursal": _clean_text(row.get("branch_nomina")) or _clean_text(row.get("branch_accesos")),
             "categoria": category,
             "descripcion": description,
             "severidad": severity,
@@ -139,14 +147,14 @@ def worker_payloads(df: pd.DataFrame, process_id: str) -> list[dict]:
     for _, row in df.iterrows():
         payloads.append({
             "rut": row.get("rut") or None,
-            "full_name": row.get("full_name") or "Nombre no informado",
-            "branch": row.get("sucursal") or None,
+            "full_name": _clean_text(row.get("full_name")) or "Nombre no informado",
+            "branch": _clean_text(row.get("sucursal")) or None,
             "source_process_id": process_id,
             "metadata": {
                 "source": "conciliacion_nomina_accesos",
-                "payroll_status": row.get("nomina"),
-                "access_status": row.get("accesos"),
-                "seyses_status": row.get("estado"),
+                "payroll_status": _clean_text(row.get("nomina")) or None,
+                "access_status": _clean_text(row.get("accesos")) or None,
+                "seyses_status": _clean_text(row.get("estado")) or None,
             },
             "payroll_status": row.get("nomina"),
             "access_status": row.get("accesos"),
