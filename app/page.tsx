@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import Link from "next/link";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
+import AttendanceAnalyzer from "@/components/AttendanceAnalyzer";
 
 type Profile = { user_id: string; display_name: string | null; role: string; active: boolean; email?: string };
 type Row = Record<string, unknown>;
@@ -11,6 +12,7 @@ const modules = [
   { id: "Resumen ejecutivo", icon: "◈", title: "Resumen ejecutivo", desc: "Indicadores generales y estado de la operación." },
   { id: "Extractor Previred", icon: "▤", title: "Extractor Previred", desc: "Preparación de cotizaciones desde archivos PDF." },
   { id: "Importar y conciliar", icon: "⇄", title: "Importar y conciliar", desc: "Cruce de nómina y control de accesos." },
+  { id: "Analizador universal de asistencia", icon: "◷", title: "Analizador de asistencia", desc: "Normaliza reportes de asistencia de distintos ERP y totaliza horas por trabajador." },
   { id: "Trabajadores", icon: "♙", title: "Trabajadores", desc: "Consulta del maestro de trabajadores." },
   { id: "Procesos", icon: "◷", title: "Procesos", desc: "Seguimiento de ejecuciones y resultados." },
   { id: "Diferencias", icon: "⚑", title: "Diferencias", desc: "Hallazgos y seguimiento de resolución." },
@@ -29,6 +31,7 @@ const descriptions: Record<string, string> = {
   "Resumen ejecutivo": "Una vista clara de la operación, los procesos y las alertas.",
   "Extractor Previred": "La interfaz web está preparada; el motor Python de extracción debe migrarse antes de procesar PDF aquí.",
   "Importar y conciliar": "La interfaz web está preparada; el motor de conciliación Python debe portarse y validarse antes de guardar resultados.",
+  "Analizador universal de asistencia": "Carga Excel o CSV de distintos ERP, ajusta el período, mapea sus columnas y calcula horas por trabajador.",
   Trabajadores: "Registros disponibles en la base de datos de SEYSES.",
   Procesos: "Seguimiento de ejecuciones, resultados y errores.",
   Diferencias: "Hallazgos que requieren revisión y seguimiento.",
@@ -212,6 +215,7 @@ export default function Home() {
       </section>}
       {section === "Extractor Previred" && <div className="panel"><h2>Extractor Previred</h2><p className="muted">La extracción actual está implementada en el motor Python del proyecto. Esta versión web no procesa todavía archivos PDF; el siguiente paso es portar el analizador y validar formatos reales antes de habilitar la operación.</p><div className="notice">No cargues documentos previsionales desde esta pantalla hasta completar esa migración.</div></div>}
       {section === "Importar y conciliar" && <div className="panel"><h2>Importar y conciliar</h2><p className="muted">El motor de validación y conciliación está en Python. La interfaz web todavía no guarda conciliaciones; primero debe migrarse el análisis de Excel y validarse con datos de prueba.</p><div className="notice">Para evitar escrituras incompletas, la carga está deshabilitada en esta versión inicial de Vercel.</div></div>}
+      {section === "Analizador universal de asistencia" && <AttendanceAnalyzer userId={user.id} />}
       {section === "Administración" && <div className="panel"><h2>Perfil y permisos</h2><div className="grid"><Metric label="Usuario" value={profile.display_name || "—"} foot={profile.email || ""}/><Metric label="Rol" value={profile.role} foot={isAdmin ? "Perfil administrador" : "Acceso limitado por rol"}/><Metric label="Cuenta" value={profile.active ? "Activa" : "Inactiva"} foot="Estado de user_profiles"/><Metric label="Autenticación" value="Supabase" foot="Sesión protegida"/></div><p className="muted">La administración de usuarios y la edición de roles deben hacerse desde los controles autorizados de Supabase hasta migrar el flujo administrativo completo.</p></div>}
       <footer className="muted" style={{fontSize:".75rem",marginTop:24}}>SEYSES · Centro de Control Integral · Datos sujetos a permisos de Supabase.</footer>
     </main>
