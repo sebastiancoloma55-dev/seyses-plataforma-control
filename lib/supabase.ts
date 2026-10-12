@@ -1,1 +1,18 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";\n\nlet browserClient: SupabaseClient | null = null;\n\n// Only public Supabase keys may be used in client-side code.\n// Preview may inherit a wrongly configured secret under the old ANON_KEY variable; ignore it.\nconst PUBLIC_SUPABASE_URL = "https://isddbsunqyksqisoqjmd.supabase.co";\nconst PUBLIC_SUPABASE_KEY = "sb_publishable_iOhlV46KJV1Imm2Y4Jeisg_xWvFZlHX";\n\nfunction isSafePublicKey(value: string): boolean {\n  if (!value || value.startsWith("sb_secret_")) return false;\n  // Legacy Supabase anon keys are JWTs. Reject service_role JWTs if one was pasted by mistake.\n  const parts = value.split(".");\n  if (parts.length === 3) {\n    try {\n      const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");\n      const decoded = JSON.parse(atob(payload)) as { role?: string };\n      if (decoded.role === "service_role") return false;\n    } catch {\n      // A non-JWT publishable key is validated by the prefix checks above.\n    }\n  }\n  return value.startsWith("sb_publishable_") || (parts.length === 3 && value.length > 100);\n}\n\nexport function getSupabase(): SupabaseClient {\n  const configuredUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;\n  const url = configuredUrl && configuredUrl.startsWith("https://") ? configuredUrl : PUBLIC_SUPABASE_URL;\n  const candidates = [\n    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,\n    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,\n    PUBLIC_SUPABASE_KEY\n  ].filter((value): value is string => Boolean(value));\n  const key = candidates.find(isSafePublicKey);\n\n  if (!url || !key) {\n    throw new Error("No hay una clave pública válida de Supabase. No uses claves secretas ni service_role en el navegador.");\n  }\n\n  if (!browserClient) {\n    browserClient = createClient(url, key, {\n      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }\n    });\n  }\n  return browserClient;\n}\n
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+let browserClient: SupabaseClient | null = null;
+
+// Explicitly use this SEYSES project's public publishable key in the browser.
+// Do not read NEXT_PUBLIC_SUPABASE_ANON_KEY here: it may have been misconfigured
+// with a secret key in Vercel Preview and would override the valid public key.
+const SUPABASE_URL = "https://isddbsunqyksqisoqjmd.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_iOhlV46KJV1Imm2Y4Jeisg_xWvFZlHX";
+
+export function getSupabase(): SupabaseClient {
+  if (!browserClient) {
+    browserClient = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+  }
+  return browserClient;
+}
