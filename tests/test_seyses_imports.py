@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from sesyes_imports import normalize_rut, reconcile_sources, worker_payloads
+from seyses_imports import normalize_rut, reconcile_sources, worker_payloads
 
 
 class ReconciliationTests(unittest.TestCase):
