@@ -156,7 +156,7 @@ def reconcile_sources(payroll_df: pd.DataFrame, access_df: pd.DataFrame) -> tupl
     return result, payroll_info, access_info
 
 
-def worker_payloads(df: pd.DataFrame, process_id: str) -> list[dict]:
+def worker_payloads(df: pd.DataFrame, process_id: str | None = None) -> list[dict]:
     payloads = []
     for _, row in df.iterrows():
         payloads.append({
