@@ -1,28 +1,36 @@
-# SEYSES · Control Integral
+# SEYSES · Centro de Control Integral
 
-Aplicación Streamlit con autenticación Supabase y base de datos independiente.
+Aplicación Streamlit conectada a Supabase para gestión de trabajadores, procesos, diferencias, archivos y auditoría.
 
-## Estado
-Esta rama incorpora una primera interfaz conectada a Supabase para autenticación, panel de estado, consulta de trabajadores, historial de procesos y auditoría por rol. La importación real de Previred, el almacenamiento privado de archivos y la gestión administrativa completa aún requieren integración y pruebas antes de uso productivo.
+## Mejoras de interfaz incluidas
+- Diseño responsive con navegación lateral y jerarquía visual corporativa.
+- Panel ejecutivo con indicadores consultados desde Supabase.
+- Gráficos interactivos de tendencia de procesos y distribución de diferencias.
+- Vistas de trabajadores, procesos, diferencias, archivos y auditoría.
+- Filtros de búsqueda, descarga CSV de resultados y actualización manual.
+- Acceso con Supabase Auth y permisos basados en perfiles.
+- Mensajes de error que evitan mostrar detalles internos de la base de datos.
+
+## Estado real
+Esta es una versión de avance para revisión, no una declaración de producción lista. El dashboard consulta datos reales disponibles y muestra estados vacíos si todavía no existen registros. Los flujos completos de importación/conciliación, carga/descarga de archivos privados, pruebas de autorización por rol, respaldo y despliegue público siguen pendientes.
 
 ## Requisitos
 - Python 3.10+
 - Proyecto Supabase activo
-- Usuario creado en Supabase Authentication
-- Perfil correspondiente en `public.user_profiles`
+- Usuario en Supabase Authentication con un perfil correspondiente en `public.user_profiles`
 
 ## Configuración local
-1. Instala dependencias: `pip install -r requirements.txt`
-2. Configura secretos mediante variables de entorno `SUPABASE_URL` y `SUPABASE_KEY`, o en `.streamlit/secrets.toml`.
-3. Crea una cuenta en Supabase Authentication.
-4. Copia el UUID de la cuenta y crea un perfil en `public.user_profiles` con `user_id`, `display_name`, `role` y `active=true`. Los roles permitidos son `admin`, `operator` y `auditor`.
-5. Ejecuta: `streamlit run app.py`
+1. Instala las dependencias: `pip install -r requirements.txt`.
+2. Configura `SUPABASE_URL` y `SUPABASE_KEY` como variables de entorno o en `.streamlit/secrets.toml`.
+3. Crea el usuario en Supabase Authentication.
+4. Crea el perfil con el mismo UUID en `public.user_profiles`, con un rol permitido: `admin`, `operator` o `auditor`.
+5. Ejecuta `streamlit run app.py`.
 
 ## Seguridad
-- No usar contraseñas de prueba ni subir archivos de secretos al repositorio.
-- No colocar la clave service-role en la aplicación.
-- No cargar datos personales reales hasta completar pruebas de permisos, almacenamiento privado y flujos de importación.
-- Las políticas RLS de Supabase deben permanecer habilitadas.
+- Nunca subas `.env` ni `.streamlit/secrets.toml` al repositorio.
+- No incluyas claves service-role en la aplicación.
+- Mantén RLS activado y prueba cada rol antes de cargar datos personales reales.
+- La aplicación no debe considerarse lista para datos productivos hasta validar permisos, auditoría y flujos de importación.
 
 ## Despliegue
-El repositorio no incluye todavía un despliegue público. Streamlit necesita un servicio de alojamiento compatible con Python; Supabase proporciona autenticación y base de datos, no aloja directamente esta interfaz Streamlit.
+Supabase aporta autenticación y base de datos, pero no aloja directamente la interfaz Streamlit. La aplicación todavía necesita un hosting compatible con Python para disponer de una URL pública.
