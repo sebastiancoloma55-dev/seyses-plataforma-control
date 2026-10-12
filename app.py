@@ -175,7 +175,7 @@ with top_right:
     st.markdown(f"<div style='text-align:right;color:#77728f;font-size:.8rem;padding-top:1.3rem'>{datetime.now().strftime('%d %b %Y')}<br><b>{datetime.now().strftime('%H:%M')}</b></div>", unsafe_allow_html=True)
 
 
-elif section == "Importar y conciliar":
+if section == "Importar y conciliar":
     if role not in ("admin", "operator"):
         st.error("Tu perfil es de solo lectura. Solicita al administrador un perfil operador para cargar y conciliar archivos.")
     else:
@@ -298,7 +298,7 @@ elif section == "Importar y conciliar":
                     log_event(client, user, "reconciliation_failed", "Importación y conciliación", "failure", {"process_id": process_id})
                     st.error("No se completó el guardado. El proceso quedó marcado como fallido si alcanzó a registrarse. Revisa los permisos y el historial antes de volver a intentar para evitar duplicar diferencias.")
 
-if section == "Resumen ejecutivo":
+elif section == "Resumen ejecutivo":
     if st.button("↻ Actualizar indicadores"):
         st.rerun()
     workers_count = exact_count(client, "workers")
