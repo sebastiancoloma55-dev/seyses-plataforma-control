@@ -28,6 +28,19 @@ type AttendanceRow = {
   attendance_status: string;
 };
 type ImportInfo = { id: string; original_filename: string; erp_name: string; period_start: string; period_end: string; rows_total: number; rows_valid: number; rows_rejected: number; status: string; created_at: string };
+type WorkerSummary = {key:string;rut:string;name:string;branch:string;days:Set<string>;rows:number;assigned:Set<string>;scheduled:number;worked:number;overtime:number;late:number};
+function aggregateAttendance(rows: AttendanceRow[]): WorkerSummary[] {
+  const map = new Map<string,WorkerSummary>();
+  for (const r of rows) {
+    const key = r.worker_key;
+    if (!map.has(key)) map.set(key,{key,rut:r.worker_rut,name:r.worker_name,branch:r.branch,days:new Set(),rows:0,assigned:new Set(),scheduled:0,worked:0,overtime:0,late:0});
+    const g = map.get(key)!; g.days.add(r.work_date); g.rows++;
+    if (r.shift_name) g.assigned.add(r.shift_name); else if (r.scheduled_start || r.scheduled_end) g.assigned.add(`${r.scheduled_start.slice(0,5) || "?"}–${r.scheduled_end.slice(0,5) || "?"}`);
+    g.scheduled += Number(r.scheduled_minutes)||0; g.worked += Number(r.worked_minutes)||0; g.overtime += Number(r.overtime_minutes)||0; g.late += Number(r.late_minutes)||0;
+    if (!g.branch && r.branch) g.branch = r.branch;
+  }
+  return [...map.values()].sort((a,b)=>a.name.localeCompare(b.name,"es"));
+}
 const FIELDS: { key: FieldKey; label: string; required?: boolean; aliases: string[] }[] = [
   { key: "worker_rut", label: "RUT / DNI / documento", aliases: ["rut","run","dni","documento","cedula","identificacion","identificación","numero documento","número documento"] },
   { key: "worker_id", label: "ID / código trabajador", aliases: ["employee id","id empleado","codigo empleado","código empleado","legajo","matricula","matrícula","numero empleado","numero trabajador","worker id"] },
@@ -140,6 +153,9 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [imports, setImports] = useState<ImportInfo[]>([]);
+  const [savedRows, setSavedRows] = useState<AttendanceRow[]>([]);
+  const [savedImport, setSavedImport] = useState<ImportInfo|null>(null);
+  const [loadingSaved, setLoadingSaved] = useState(false);
 
   async function loadImports() {
     try {
@@ -153,6 +169,30 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     }
   }
   useEffect(() => { void loadImports(); }, []);
+
+  async function viewSavedImport(item: ImportInfo) {
+    setError(""); setNotice(""); setLoadingSaved(true);
+    try {
+      const {data,error:queryError} = await getSupabase().from("attendance_records")
+        .select("source_row,worker_key,worker_rut,worker_name,branch,work_date,shift_name,scheduled_start,scheduled_end,actual_start,actual_end,scheduled_minutes,worked_minutes,overtime_minutes,late_minutes,attendance_status")
+        .eq("import_id",item.id).order("work_date",{ascending:true}).limit(10000);
+      if (queryError) throw queryError;
+      setSavedRows((data ?? []) as unknown as AttendanceRow[]);
+      setSavedImport(item);
+      if (!data?.length) setNotice("Este reporte no tiene filas disponibles para mostrar.");
+    } catch(e) {
+      setError(e instanceof Error ? e.message : "No se pudo consultar el detalle del reporte importado.");
+    } finally { setLoadingSaved(false); }
+  }
+
+  function exportSavedSummary() {
+    downloadCsv(savedGrouped.map(g=>({
+      RUT:g.rut, trabajador:g.name, sucursal:g.branch, dias_con_registro:g.days.size, filas:g.rows,
+      turnos_asignados:[...g.assigned].join(" | "), horas_programadas:fmtMinutes(g.scheduled),
+      horas_trabajadas:fmtMinutes(g.worked), diferencia_minutos:g.worked-g.scheduled,
+      horas_extra:fmtMinutes(g.overtime), atraso:fmtMinutes(g.late)
+    })),`resumen_guardado_${savedImport?.period_start}_${savedImport?.period_end}.csv`);
+  }
 
   async function selectFile(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0] ?? null;
@@ -226,18 +266,8 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
   }),[rawRows,mapping,periodStart,periodEnd]);
 
   const invalidRows = rawRows.length - mapped.length;
-  const grouped = useMemo(() => {
-    const map = new Map<string,{key:string;rut:string;name:string;branch:string;days:Set<string>;rows:number;assigned:Set<string>;scheduled:number;worked:number;overtime:number;late:number}>();
-    for (const r of mapped) {
-      const key = r.worker_key;
-      if (!map.has(key)) map.set(key,{key,rut:r.worker_rut,name:r.worker_name,branch:r.branch,days:new Set(),rows:0,assigned:new Set(),scheduled:0,worked:0,overtime:0,late:0});
-      const g = map.get(key)!; g.days.add(r.work_date); g.rows++;
-      if (r.shift_name) g.assigned.add(r.shift_name); else if (r.scheduled_start || r.scheduled_end) g.assigned.add(`${r.scheduled_start.slice(0,5) || "?"}–${r.scheduled_end.slice(0,5) || "?"}`);
-      g.scheduled += r.scheduled_minutes; g.worked += r.worked_minutes; g.overtime += r.overtime_minutes; g.late += r.late_minutes;
-      if (!g.branch && r.branch) g.branch = r.branch;
-    }
-    return [...map.values()].sort((a,b)=>a.name.localeCompare(b.name,"es"));
-  },[mapped]);
+  const grouped = useMemo(() => aggregateAttendance(mapped),[mapped]);
+  const savedGrouped = useMemo(() => aggregateAttendance(savedRows),[savedRows]);
 
   async function save() {
     setError(""); setNotice("");
@@ -328,8 +358,18 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
 
     <section className="panel">
       <div className="section-head"><h2>Historial de reportes importados</h2><button className="btn" onClick={()=>void loadImports()}>Actualizar</button></div>
-      {imports.length===0?<div className="empty"><strong>Sin reportes importados todavía</strong>Los reportes solo aparecen aquí después de confirmar la importación.</div>:<div className="table-wrap"><table><thead><tr><th>Fecha de carga</th><th>Archivo</th><th>ERP</th><th>Período revisado</th><th>Filas válidas</th><th>Observaciones</th><th>Estado</th></tr></thead><tbody>{imports.map(i=><tr key={i.id}><td>{new Date(i.created_at).toLocaleString("es-CL")}</td><td>{i.original_filename}</td><td>{i.erp_name}</td><td>{i.period_start} al {i.period_end}</td><td>{i.rows_valid}</td><td>{i.rows_rejected}</td><td>{i.status}</td></tr>)}</tbody></table></div>}
+      {imports.length===0?<div className="empty"><strong>Sin reportes importados todavía</strong>Los reportes solo aparecen aquí después de confirmar la importación.</div>:<div className="table-wrap"><table><thead><tr><th>Fecha de carga</th><th>Archivo</th><th>ERP</th><th>Período revisado</th><th>Filas válidas</th><th>Observaciones</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>{imports.map(i=><tr key={i.id}><td>{new Date(i.created_at).toLocaleString("es-CL")}</td><td>{i.original_filename}</td><td>{i.erp_name}</td><td>{i.period_start} al {i.period_end}</td><td>{i.rows_valid}</td><td>{i.rows_rejected}</td><td>{i.status}</td><td><button className="btn" onClick={()=>void viewSavedImport(i)} disabled={loadingSaved}>{loadingSaved?"Cargando…":"Ver trabajadores"}</button></td></tr>)}</tbody></table></div>}
     </section>
+    {savedImport && <section className="panel">
+      <div className="section-head"><div><h2>Detalle individual guardado</h2><p className="muted">{savedImport.original_filename} · {savedImport.erp_name} · {savedImport.period_start} al {savedImport.period_end}</p></div><div className="actions"><button className="btn" onClick={exportSavedSummary} disabled={!savedGrouped.length}>Exportar resumen</button><button className="btn" onClick={()=>{setSavedImport(null);setSavedRows([]);}}>Cerrar detalle</button></div></div>
+      <div className="grid attendance-kpis">
+        <Metric label="Trabajadores" value={String(savedGrouped.length)} foot="Con registros dentro del período"/>
+        <Metric label="Horas trabajadas" value={fmtMinutes(savedRows.reduce((s,r)=>s+(Number(r.worked_minutes)||0),0))} foot="Suma de registros guardados"/>
+        <Metric label="Horas extra" value={fmtMinutes(savedRows.reduce((s,r)=>s+(Number(r.overtime_minutes)||0),0))} foot="Horas extra informadas o calculadas"/>
+        <Metric label="Atrasos" value={fmtMinutes(savedRows.reduce((s,r)=>s+(Number(r.late_minutes)||0),0))} foot="Minutos de atraso totalizados"/>
+      </div>
+      <div className="table-wrap"><table><thead><tr><th>RUT / ID</th><th>Trabajador</th><th>Sucursal</th><th>Días con registro</th><th>Turnos asignados</th><th>Programadas</th><th>Trabajadas</th><th>H. extra</th><th>Atraso</th></tr></thead><tbody>{savedGrouped.map(g=><tr key={g.key}><td>{g.rut||g.key}</td><td>{g.name}</td><td>{g.branch||"—"}</td><td>{g.days.size}</td><td>{[...g.assigned].join(", ")||"—"}</td><td>{fmtMinutes(g.scheduled)}</td><td>{fmtMinutes(g.worked)}</td><td>{fmtMinutes(g.overtime)}</td><td>{fmtMinutes(g.late)}</td></tr>)}</tbody></table></div>
+    </section>}
   </div>;
 }
 
