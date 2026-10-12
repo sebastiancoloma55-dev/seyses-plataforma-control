@@ -25,8 +25,8 @@ La base de datos SEYSES estaba inicialmente vacía de datos operativos. Las comp
 
 ### Archivos admitidos actualmente
 - Excel .xlsx, Excel antiguo .xls y CSV.
-- Hasta 15 MB y 10.000 filas de datos por carga.
-- Se procesa la primera hoja del libro Excel.
+- Hasta 15 MB y 150.000 filas de datos por carga.
+- En Excel, se detectan y combinan hojas de detalle compatibles con cabeceras de asistencia; se ignoran hojas de resumen que no contienen registros diarios. Los lotes se guardan de 2.000 filas para admitir libros grandes y reanudar cargas fallidas.
 - Los archivos PDF, XML, JSON, conectores por API y descargas directas desde cada ERP aún necesitan un adaptador específico. No se afirma compatibilidad nativa con todos los ERP del mundo: se admite un formato genérico por mapeo de encabezados y se pueden añadir adaptadores para los formatos faltantes.
 
 ### Columnas y equivalencias
@@ -69,6 +69,10 @@ RUT;Nombre trabajador;Sucursal;Fecha;Turno asignado;Inicio planificado;Fin plani
 Ejemplo ficticio de una fila: 12.345.678-5;Trabajador de prueba;Sucursal Centro;2026-08-01;AM;08:00;17:00;08:03;17:08;8:35;0:08;0:30;Presente.
 
 Usa datos ficticios al probar y valida los totales contra el informe original del ERP antes de usar el análisis para nómina o decisiones laborales.
+
+## Fuente histórica localizada para recuperar
+
+Se localizó en el archivo disponible de RRHH el libro `Reporte_Consolidado_RRHH_Analisis.xlsx`, con 13 hojas semanales de detalle, 103.921 filas diarias, 1.536 RUT distintos y fechas del 30-03-2026 al 28-06-2026. Contiene trabajador, RUT, sucursal, cargo, fecha, marcaciones reales, horario programado, horas asignadas/asistidas, horas extra 30%/50%, permiso, horas de contrato, jefatura y estado en nómina. El nuevo analizador puede leer el libro original y combinar sus hojas de detalle. Este archivo aún no está cargado en las tablas de SEYSES; la base inicialmente verificada estaba vacía de asistencia operativa. No se deben importar también los resúmenes agregados del mismo período como si fueran jornadas diarias, porque pueden duplicar horas. El consolidado disponible termina el 28-06-2026; para completar agosto con detalle diario hace falta un reporte fuente que incluya julio/agosto.
 
 ## Pendientes antes de producción
 
