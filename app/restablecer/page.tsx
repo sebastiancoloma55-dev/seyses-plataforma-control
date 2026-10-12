@@ -34,8 +34,10 @@ export default function RestablecerCuenta() {
       setPassword(""); setConfirm("");
       setMessage("Contraseña actualizada. Ya puedes volver al inicio e ingresar con tu nueva contraseña.");
       await getSupabase().auth.signOut();
-    } catch {
-      setError("El enlace puede haber vencido o ser inválido. Solicita uno nuevo desde Recuperar contraseña.");
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : "Error desconocido";
+      console.error("SEYSES password update failed:", detail);
+      setError(`No se pudo cambiar la contraseña: ${detail}. Si el enlace venció o ya se usó, solicita uno nuevo.`);
     } finally { setBusy(false); }
   }
 
