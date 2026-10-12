@@ -114,7 +114,7 @@ function parseTimeMinutes(v: unknown): number | null {
 function parseDuration(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) {
     if (v >= 0 && v < 1) return Math.round(v*1440);
-    return v >= 0 ? Math.round(v*60) : null;
+    return v >= 0 ? Number((v*60).toFixed(2)) : null;
   }
   const s = text(v).toLowerCase();
   if (!s) return null;
