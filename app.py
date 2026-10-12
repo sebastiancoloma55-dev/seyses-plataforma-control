@@ -480,6 +480,36 @@ elif section == "Diferencias":
         if severity_filter != "Todas": df = df[df["severity"].astype(str) == severity_filter]
         st.dataframe(df.drop(columns=["id"], errors="ignore"), use_container_width=True, hide_index=True)
         st.download_button("Exportar diferencias CSV", df.to_csv(index=False).encode("utf-8-sig"), "seyses_diferencias.csv", "text/csv")
+        if role in ("admin", "operator") and not df.empty:
+            with st.expander("Actualizar seguimiento de una diferencia"):
+                choices = df["id"].astype(str).tolist()
+                selected_id = st.selectbox(
+                    "Diferencia",
+                    choices,
+                    format_func=lambda value: next(
+                        (f"{row['rut'] or 'Sin RUT'} · {row['category']} · {row['status']}" for _, row in df.iterrows() if str(row["id"]) == value),
+                        value,
+                    ),
+                )
+                selected_row = df[df["id"].astype(str) == selected_id].iloc[0]
+                status_options = ["open", "in_review", "resolved", "ignored"]
+                current_status = str(selected_row["status"])
+                next_status = st.selectbox("Nuevo estado", status_options, index=status_options.index(current_status) if current_status in status_options else 0)
+                resolution_notes = st.text_area("Notas de seguimiento", value=str(selected_row.get("resolution_notes") or ""))
+                if st.button("Guardar seguimiento", type="primary"):
+                    try:
+                        update_payload = {
+                            "status": next_status,
+                            "resolution_notes": resolution_notes.strip() or None,
+                            "resolved_by": user.get("user_id") if next_status == "resolved" else None,
+                            "resolved_at": datetime.now().astimezone().isoformat() if next_status == "resolved" else None,
+                        }
+                        client.table("discrepancies").update(update_payload).eq("id", selected_id).execute()
+                        log_event(client, user, "discrepancy_updated", "Diferencias", "success", {"discrepancy_id": selected_id, "status": next_status})
+                        st.success("Seguimiento actualizado y registrado en auditoría.")
+                        st.rerun()
+                    except Exception:
+                        st.error("No se pudo actualizar la diferencia. Verifica los permisos de tu perfil.")
 
 elif section == "Archivos":
     df, err = safe_query(client, "processed_files", "id, created_at, original_filename, file_kind, content_type, file_size_bytes, status, process_run_id", 1000, "created_at", True)
