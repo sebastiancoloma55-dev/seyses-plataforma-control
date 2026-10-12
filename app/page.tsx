@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import Link from "next/link";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
 
@@ -177,7 +178,7 @@ export default function Home() {
       {error && <div className="notice error" role="alert">{error}</div>}
       {message && <div className="notice success">{message}</div>}
       <button className="btn primary" type="submit" disabled={busy}>{busy ? "Validando…" : "Ingresar de forma segura"}</button>
-    </form><div className="muted" style={{fontSize:".76rem",textAlign:"center",marginTop:18}}>Acceso protegido por Supabase Auth · Sin contraseñas predeterminadas</div>
+    </form><p style={{textAlign:"center",marginTop:16}}><Link href="/recuperar">¿Olvidaste tu contraseña?</Link></p><div className="muted" style={{fontSize:".76rem",textAlign:"center",marginTop:18}}>Acceso protegido por Supabase Auth · Sin contraseñas predeterminadas</div>
   </section></main>;
 
   const isAdmin = profile.role === "admin";
