@@ -80,7 +80,7 @@ function parseCertificate(text:string):MutablePreviredRow[] {
   const months="Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre";
   // Previred certificates can have one contribution split over several extracted PDF text lines.
   // Flatten whitespace inside each employee block and match all contribution entries across it.
-  const contribution=new RegExp("([A-Za-zÁÉÍÓÚÑáéíóúñ][A-Za-zÁÉÍÓÚÑáéíóúñ\\\\s()./-]{2,}?)\\\\s+("+months+")\\\\s+(\\\\d{4})\\\\s+(REM|GRA|RET|LEY|COM)\\\\s+\\\\$?\\\\s*([\\\\d][\\\\d.,]*)\\\\s+\\\\$?\\\\s*([\\\\d][\\\\d.,]*)","gi");
+  const contribution=new RegExp("([A-Za-zÁÉÍÓÚÑáéíóúñ][A-Za-zÁÉÍÓÚÑáéíóúñ\\s()./-]{2,}?)\\s+("+months+")\\s+(\\d{4})\\s+(REM|GRA|RET|LEY|COM)\\s+\\$?\\s*([\\d][\\d.,]*)\\s+\\$?\\s*([\\d][\\d.,]*)","gi");
   for(const chunk of chunks) {
     const info=chunk.match(/([\s\S]*?),\s*Rut\s*:\s*([\d.\-kK]+)/i);
     if(!info)continue;
