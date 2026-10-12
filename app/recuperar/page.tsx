@@ -14,10 +14,11 @@ export default function RecuperarCuenta() {
     event.preventDefault();
     setBusy(true); setMessage(""); setError("");
     try {
-      const origin = window.location.origin;
-      const { error: resetError } = await getSupabase().auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${origin}/restablecer`
-      });
+      // Never fall back to localhost when the user requests recovery from a Preview or email client.
+      // Set NEXT_PUBLIC_SITE_URL to the production domain when production is configured.
+      const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://seyses-plataforma-control-iyr5-git-feat-vercel-ne-ae0858-simi23.vercel.app";
+      const redirectTo = new URL("/restablecer", siteUrl).toString();
+      const { error: resetError } = await getSupabase().auth.resetPasswordForEmail(email.trim(), { redirectTo });
       if (resetError) throw resetError;
       setMessage("Si el correo está registrado, recibirás un enlace para crear una contraseña nueva. Revisa también Spam.");
     } catch (cause) {
