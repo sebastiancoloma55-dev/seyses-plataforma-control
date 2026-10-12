@@ -301,45 +301,16 @@ elif section == "Importar y conciliar":
             if st.button("Confirmar y guardar en SEYSES", type="primary", disabled=(not confirm) or has_duplicates, use_container_width=True):
                 process_id = None
                 try:
-                    existing = client.table("process_runs").select("id, status, created_at").contains("metadata", {
+                    existing = client.table("process_runs").select("id, status").contains("metadata", {
                         "payroll_sha256": state["payroll_meta"]["sha256"],
                         "access_sha256": state["access_meta"]["sha256"],
                     }).limit(1).execute()
                     if existing.data:
                         st.warning("Esta pareja de archivos ya figura en el historial. No se repetirá la carga automáticamente.")
                         st.stop()
-                    run_result = client.table("process_runs").insert({
-                        "created_by": user.get("user_id"),
-                        "process_type": "conciliacion_nomina_accesos",
-                        "status": "started",
-                        "source_filename": f"{state['payroll_meta']['filename']} + {state['access_meta']['filename']}",
-                        "records_read": int(state["payroll_meta"]["rows"] + state["access_meta"]["rows"]),
-                        "metadata": {
-                            "payroll_sha256": state["payroll_meta"]["sha256"],
-                            "access_sha256": state["access_meta"]["sha256"],
-                            "payroll_sheet": state["payroll_meta"]["sheet"],
-                            "access_sheet": state["access_meta"]["sheet"],
-                        },
-                    }).execute()
-                    if not run_result.data:
-                        raise RuntimeError("No se pudo crear el registro de proceso.")
-                    process_id = run_result.data[0]["id"]
-                    workers = worker_payloads(preview, process_id)
-                    worker_ids = {}
-                    for worker_payload in workers:
-                        current_worker = client.table("workers").select("id").eq("rut", worker_payload["rut"]).limit(1).execute()
-                        if current_worker.data:
-                            worker_id = current_worker.data[0]["id"]
-                            client.table("workers").update(worker_payload).eq("id", worker_id).execute()
-                        else:
-                            inserted_worker = client.table("workers").insert(worker_payload).execute()
-                            worker_id = inserted_worker.data[0]["id"] if inserted_worker.data else None
-                        if worker_id:
-                            worker_ids[worker_payload["rut"]] = worker_id
+                    workers = worker_payloads(preview)
                     differences = preview[preview["categoria"] != ""]
                     diff_payloads = [{
-                        "process_run_id": process_id,
-                        "worker_id": worker_ids.get(row["rut"]),
                         "rut": row["rut"],
                         "full_name": row["full_name"] or None,
                         "category": row["categoria"],
@@ -347,47 +318,42 @@ elif section == "Importar y conciliar":
                         "description": row["descripcion"],
                         "status": "open",
                     } for _, row in differences.iterrows()]
-                    if diff_payloads:
-                        client.table("discrepancies").insert(diff_payloads).execute()
                     file_payloads = []
                     for meta, kind in [(state["payroll_meta"], "nomina"), (state["access_meta"], "accesos")]:
                         file_payloads.append({
-                            "uploaded_by": user.get("user_id"),
-                            "process_run_id": process_id,
                             "original_filename": meta["filename"],
                             "file_kind": kind,
                             "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             "file_size_bytes": meta["bytes"],
                             "checksum_sha256": meta["sha256"],
-                            "status": "processed",
                             "metadata": {"sheet": meta["sheet"], "rows": meta["rows"]},
                         })
-                    client.table("processed_files").insert(file_payloads).execute()
-                    client.table("process_runs").update({
-                        "status": "completed",
-                        "finished_at": datetime.now().astimezone().isoformat(),
-                        "records_processed": int(len(preview)),
-                        "differences_found": int(len(diff_payloads)),
-                    }).eq("id", process_id).execute()
+                    saved = client.rpc("seyses_save_reconciliation", {
+                        "p_source_filename": f"{state['payroll_meta']['filename']} + {state['access_meta']['filename']}",
+                        "p_records_read": int(state["payroll_meta"]["rows"] + state["access_meta"]["rows"]),
+                        "p_metadata": {
+                            "payroll_sha256": state["payroll_meta"]["sha256"],
+                            "access_sha256": state["access_meta"]["sha256"],
+                            "payroll_sheet": state["payroll_meta"]["sheet"],
+                            "access_sheet": state["access_meta"]["sheet"],
+                        },
+                        "p_workers": workers,
+                        "p_differences": diff_payloads,
+                        "p_files": file_payloads,
+                    }).execute()
+                    result = saved.data if isinstance(saved.data, dict) else {}
+                    process_id = result.get("process_id")
                     log_event(client, user, "reconciliation_completed", "Importación y conciliación", "success", {
                         "process_id": process_id,
                         "records_processed": int(len(preview)),
                         "differences_found": int(len(diff_payloads)),
                     })
-                    st.success(f"Conciliación guardada. Personas: {len(preview)} · Diferencias: {len(diff_payloads)}.")
+                    st.success(f"Conciliación guardada de forma atómica. Personas: {len(preview)} · Diferencias: {len(diff_payloads)}.")
                     st.session_state.seyses_reconciliation = None
                     st.rerun()
                 except Exception:
-                    if process_id:
-                        try:
-                            client.table("process_runs").update({
-                                "status": "failed",
-                                "error_summary": "Error durante el guardado; revisar registros y volver a validar antes de reintentar.",
-                            }).eq("id", process_id).execute()
-                        except Exception:
-                            pass
-                    log_event(client, user, "reconciliation_failed", "Importación y conciliación", "failure", {"process_id": process_id})
-                    st.error("No se completó el guardado. El proceso quedó marcado como fallido si alcanzó a registrarse. Revisa los permisos y el historial antes de volver a intentar para evitar duplicar diferencias.")
+                    log_event(client, user, "reconciliation_failed", "Importación y conciliación", "failure")
+                    st.error("No se guardaron cambios parciales: la operación se ejecuta en una transacción de base de datos. Revisa permisos y formato de datos antes de reintentar.")
 
 elif section == "Resumen ejecutivo":
     if st.button("↻ Actualizar indicadores"):
