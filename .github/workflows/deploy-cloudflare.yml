@@ -1,6 +1,9 @@
 name: Deploy SEYSES to Cloudflare Workers
 
 on:
+  push:
+    branches:
+      - feat/cloudflare-migracion
   workflow_dispatch:
 
 permissions:
