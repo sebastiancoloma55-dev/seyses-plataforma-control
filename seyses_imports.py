@@ -33,9 +33,19 @@ def normalize_rut(value: Any) -> str:
     raw = raw.replace("—", "-").replace("–", "-")
     raw = re.sub(r"\.0$", "", raw)
     raw = raw.replace("-", "")
-    if len(raw) < 2:
+    if len(raw) < 2 or not raw[:-1].isdigit():
         return ""
-    return f"{raw[:-1]}-{raw[-1]}"
+    digits, check_digit = raw[:-1], raw[-1]
+    total = 0
+    weight = 2
+    for digit in reversed(digits):
+        total += int(digit) * weight
+        weight = 2 if weight == 7 else weight + 1
+    calculated = 11 - (total % 11)
+    expected = "0" if calculated == 11 else "K" if calculated == 10 else str(calculated)
+    if check_digit != expected:
+        return ""
+    return f"{digits}-{check_digit}"
 
 
 def file_sha256(content: bytes) -> str:
