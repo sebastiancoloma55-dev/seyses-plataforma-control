@@ -272,13 +272,106 @@ function extractPdfLabelValue(lines: PdfVisualLine[], label: string): string {
   return "";
 }
 
-async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows: RawRow[]; pages: number }> {
+function parseTalanaShortDate(value: string, year: number): string {
+  const match = value.match(/\b([A-Za-zÁÉÍÓÚÑáéíóúñ]{3,12})\.?\s+(\d{1,2})\b/);
+  if (!match) return parseDate(value);
+  const monthText = norm(match[1]).replace(/\./g,"");
+  const monthKey = monthText.slice(0,3);
+  const months: Record<string,string> = {
+    jan:"01", ene:"01", feb:"02", mar:"03", apr:"04", abr:"04",
+    may:"05", jun:"06", jul:"07", aug:"08", ago:"08", sep:"09",
+    oct:"10", nov:"11", dec:"12", dic:"12"
+  };
+  const month = months[monthKey];
+  const day = Number(match[2]);
+  if (!month || day < 1 || day > 31) return "";
+  const iso = String(year)+"-"+month+"-"+String(day).padStart(2,"0");
+  const parsed = new Date(iso+"T00:00:00Z");
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0,10)===iso ? iso : "";
+}
+
+function parseTalanaAttendanceRows(
+  pages: Array<{tokens:PositionedPdfToken[];lines:PdfVisualLine[];width:number}>,
+  fullText: string,
+  file: File
+): {headers:string[];rows:RawRow[];pages:number;erp:string} {
+  const yearMatch = fullText.match(/\b(?:19|20)\d{2}\b/);
+  const reportYear = yearMatch ? Number(yearMatch[0]) : new Date().getFullYear();
+  const columns = [
+    "RUT", "Nombre empleado", "Sucursal", "Fecha", "Turno asignado",
+    "Inicio turno planificado", "Fin turno planificado", "Entrada", "Salida",
+    "H. Trabajadas", "H. Ext.", "Desc.", "Justificación", "Horas Asignadas"
+  ];
+  const rows:RawRow[] = [];
+  const firstPage = pages.find(item=>item.lines.length>0);
+  const firstLines = firstPage?.lines ?? [];
+  const rutPattern = /\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
+  const employee = extractPdfLabelValue(firstLines,"Empleado") || extractPdfLabelValue(firstLines,"Nombre");
+  const labelledRut = extractPdfLabelValue(firstLines,"Rut").match(rutPattern)?.[0]?.toUpperCase() ?? "";
+  const filenameRut = file.name.match(rutPattern)?.[0]?.toUpperCase() ?? "";
+  const rut = labelledRut || filenameRut;
+  const branch = extractPdfLabelValue(firstLines,"Sucursal");
+
+  // Talana places the day/month in the first cell and splits some headings
+  // across lines (e.g. "Horas" / "Asignadas"). Use the report's table bands,
+  // scaled proportionally to page width, instead of treating header text starts
+  // as cell boundaries.
+  const baseBoundaries = [60,151,214,246,276,311,345,390,456,520,560];
+  for (const page of pages) {
+    const scale = page.width / 595;
+    const boundaries = baseBoundaries.map(value=>value*scale);
+    for (const line of page.lines) {
+      const cells = Array.from({length:12},()=>[] as string[]);
+      for (const item of line.items) {
+        let cellIndex=0;
+        while (cellIndex<boundaries.length && item.x>=boundaries[cellIndex]) cellIndex++;
+        cells[cellIndex].push(item.str);
+      }
+      const dateCell = cells[0].join(" ").replace(/\s+/g," ").trim();
+      const date = parseTalanaShortDate(dateCell,reportYear);
+      if (!date) continue;
+
+      const schedule = cells[2].join(" ").replace(/\s+/g," ").trim();
+      const times = schedule.match(/\b(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\b/);
+      const plannedStart = times?.[1] ?? "";
+      const plannedEnd = times?.[2] ?? "";
+      const turn = cells[1].join(" ").replace(/\s+/g," ").trim();
+      const reason = cells[9].join(" ").replace(/\s+/g," ").trim();
+      const worked = cells[5].join(" ").trim();
+      const extra = cells[6].join(" ").trim();
+      const lateness = cells[7].join(" ").trim();
+      const assigned = cells[10].join(" ").trim();
+
+      rows.push({
+        "RUT":rut,
+        "Nombre empleado":employee,
+        "Sucursal":branch,
+        "Fecha":date,
+        "Turno asignado":turn,
+        "Inicio turno planificado":plannedStart,
+        "Fin turno planificado":plannedEnd,
+        "Entrada":cells[3].join(" ").trim(),
+        "Salida":cells[4].join(" ").trim(),
+        "H. Trabajadas":worked,
+        "H. Ext.":extra,
+        "Desc.":lateness,
+        "Justificación":reason,
+        "Horas Asignadas":assigned
+      });
+    }
+  }
+  if (!rows.length) {
+    throw new Error("Reconocí que es un Reporte individual de asistencia de Talana, pero no pude separar sus filas. El PDF debe contener texto digital; revisa que no esté escaneado ni protegido.");
+  }
+  return {headers:columns,rows,pages:pages.length,erp:"Talana"};
+}
+
+async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows: RawRow[]; pages: number; erp?:string }> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
   const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-  const rows: RawRow[] = [];
-  const discoveredKeys = new Set<FieldKey>();
-  let rememberedHeader: { bottomY:number; anchors:PdfFieldAnchor[] } | null = null;
+  const pages: Array<{tokens:PositionedPdfToken[];lines:PdfVisualLine[];width:number}> = [];
+  let fullText = "";
   let pagesWithText = 0;
   const rutPattern = /\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
 
@@ -296,35 +389,48 @@ async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows
       if (!tokens.length) continue;
       pagesWithText++;
       const lines = groupPdfVisualLines(tokens);
+      const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+      fullText += pageText + "\n";
+      pages.push({tokens,lines,width:page.getViewport({scale:1}).width});
+    }
+
+    if (!pagesWithText) {
+      throw new Error("El PDF no tiene texto seleccionable. Si es un escaneo o una imagen, necesitará OCR; por ahora descarga el reporte como PDF digital o Excel desde el ERP.");
+    }
+    if (/reporte individual de asistencia/i.test(fullText) && /h\.\s*trab/i.test(fullText)) {
+      return parseTalanaAttendanceRows(pages,fullText,file);
+    }
+
+    // Generic digital PDF fallback for other ERP reports that expose clear,
+    // full-date rows and recognizable headers.
+    const rows:RawRow[] = [];
+    const discoveredKeys = new Set<FieldKey>();
+    let rememberedHeader: { bottomY:number; anchors:PdfFieldAnchor[] } | null = null;
+    for (const page of pages) {
+      const lines = page.lines;
       const detectedHeader = findUniversalPdfHeader(lines);
       if (detectedHeader) rememberedHeader = detectedHeader;
       const header = detectedHeader ?? rememberedHeader;
       if (!header) continue;
-
       const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
       const normalizedPageText = pageText.replace(/\s+/g," ");
       const labelledRut = extractPdfLabelValue(lines,"RUT").match(rutPattern)?.[0]?.toUpperCase() ?? "";
       const filenameRut = file.name.match(rutPattern)?.[0]?.toUpperCase() ?? "";
       const rut = labelledRut || filenameRut || normalizedPageText.match(rutPattern)?.[0]?.toUpperCase() || "";
-      const employee = extractPdfLabelValue(lines,"Empleado") || extractPdfLabelValue(lines,"Nombre");
+      const employeeName = extractPdfLabelValue(lines,"Empleado") || extractPdfLabelValue(lines,"Nombre");
       const branch = extractPdfLabelValue(lines,"Sucursal");
       const ordered = [...header.anchors].sort((a,b)=>a.x-b.x);
       const candidateLines = lines.filter(line=>{
         const joined=line.items.map(item=>item.str).join(" ");
         return line.y < header.bottomY && PDF_DATE_PATTERN.test(joined);
       });
-      const processedRows = new Set<string>();
-
       for (const line of candidateLines) {
-        const rowItems = tokens.filter(item=>Math.abs(item.y-line.y)<=5.5).sort((a,b)=>a.x-b.x);
+        const rowItems = page.tokens.filter(item=>Math.abs(item.y-line.y)<=5.5).sort((a,b)=>a.x-b.x);
         const rowText = rowItems.map(item=>item.str).join(" ");
         const dateMatch = rowText.match(PDF_DATE_PATTERN);
         if (!dateMatch) continue;
         const date = parseDate(dateMatch[0]);
         if (!date) continue;
-        const rowSignature = date + ":" + Math.round(line.y/4);
-        if (processedRows.has(rowSignature)) continue;
-        processedRows.add(rowSignature);
         const cells = new Map<FieldKey,string[]>();
         for (const anchor of ordered) cells.set(anchor.key,[]);
         for (const item of rowItems) {
@@ -348,7 +454,7 @@ async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows
         const rutField = FIELDS.find(item=>item.key==="worker_rut")!;
         const nameField = FIELDS.find(item=>item.key==="worker_name")!;
         if (!rutAnchor) { row[rutField.label] = rut; discoveredKeys.add("worker_rut"); }
-        if (!nameAnchor) { row[nameField.label] = employee; discoveredKeys.add("worker_name"); }
+        if (!nameAnchor) { row[nameField.label] = employeeName; discoveredKeys.add("worker_name"); }
         const branchAnchor = ordered.some(anchor=>anchor.key==="branch");
         if (!branchAnchor && branch) {
           row[FIELDS.find(item=>item.key==="branch")!.label] = branch;
@@ -358,13 +464,15 @@ async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows
         if (String(row[rutField.label]??"").trim() || String(row[nameField.label]??"").trim()) rows.push(row);
       }
     }
-  } finally { await document.destroy(); }
-
-  if (!pagesWithText) throw new Error("El PDF no tiene texto seleccionable. Si es un escaneo o una imagen, necesitará OCR; por ahora descarga el reporte como PDF digital o Excel desde el ERP.");
-  if (!rows.length) throw new Error("No pude detectar filas del reporte. El lector admite encabezados comunes de distintos ERP, pero el PDF debe contener una tabla digital con fecha y datos del trabajador. Descarga el reporte como Excel/CSV o comparte una copia de prueba anonimizada para añadir ese formato.");
-  const orderedKeys = [...discoveredKeys];
-  const headerKeys = orderedKeys.filter(key=>rows.some(row=>Object.prototype.hasOwnProperty.call(row,FIELDS.find(field=>field.key===key)!.label)));
-  return {headers:headerKeys.map(key=>FIELDS.find(field=>field.key===key)!.label),rows,pages:document.numPages};
+    if (!rows.length) {
+      throw new Error("No pude detectar filas del PDF. Los formatos de asistencia difieren entre ERP; descarga el reporte como Excel/CSV o solicita un adaptador para ese modelo de PDF digital.");
+    }
+    const orderedKeys = [...discoveredKeys];
+    const headerKeys = orderedKeys.filter(key=>rows.some(row=>Object.prototype.hasOwnProperty.call(row,FIELDS.find(field=>field.key===key)!.label)));
+    return {headers:headerKeys.map(key=>FIELDS.find(field=>field.key===key)!.label),rows,pages:document.numPages};
+  } finally {
+    await document.destroy();
+  }
 }
 
 function parseLateMinutes(value: unknown): number | null {
@@ -449,7 +557,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         const objects = parsedPdf.rows;
         if (!objects.length || !cols.length) throw new Error("El PDF no contiene filas de asistencia utilizables.");
         if (objects.length > 150000) throw new Error("El reporte supera 150.000 filas. Divide el archivo por períodos más pequeños.");
-        setErp(/talana/i.test(selected.name) ? "Talana" : "ERP genérico / mapeo automático");
+        setErp(parsedPdf.erp ?? "ERP genérico / mapeo automático");
         setHeaders(cols); setRawRows(objects);
         const next: Partial<Record<FieldKey,string>> = {};
         for (const field of FIELDS) {
