@@ -35,7 +35,7 @@ GitHub Actions compila los módulos Python y ejecuta pruebas unitarias del motor
 5. Ejecuta `streamlit run app.py`.
 
 ## Seguridad
-- No ejecutar `app_previred.py` como aplicación principal: es una interfaz heredada con usuarios y datos de demostración en memoria. La entrada de trabajo es `app.py`.
+- `app_previred.py` quedó deshabilitado como punto de entrada de demostración; el extractor útil se conserva en `seyses_previred.py`. La entrada principal es `app.py`.
 - Nunca subas `.env` ni `.streamlit/secrets.toml` al repositorio.
 - No incluyas claves service-role en la aplicación.
 - Mantén RLS activado y prueba cada rol antes de cargar datos personales reales.
