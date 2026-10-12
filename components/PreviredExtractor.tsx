@@ -68,7 +68,7 @@ async function readPdf(file:File) {
       });
       if(!items.length)continue;
       textPages++;
-      allText+=linesFromItems(items).map(line=>line.items.map(item=>item.str).join(" ")).join("\n")+"\n";
+      allText+=linesFromItems(items).map(line=>line.items.map(item=>item.str).join(" ")).join("\n")+"\f";
     }
   } finally { await pdf.destroy(); }
   if(!textPages||!allText.trim()) throw new Error("El PDF no contiene texto seleccionable. Los PDF escaneados requieren OCR; descarga el PDF digital desde Previred.");
@@ -78,7 +78,7 @@ function parseCertificate(text:string):MutablePreviredRow[] {
   const results=new Map<string,MutablePreviredRow>();
   const chunks=text.split(/Que,\s*las\s*cotizaciones\s*previsionales\s*del\s*Sr\.?\s*\(a\)/i).slice(1);
   const months="Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre";
-  const contribution=new RegExp("^(.+?)\\s+("+months+")\\s+(\\d{4})\\s+(REM|GRA|RET|LEY|COM)\\s+\\$?([\\d.]+)\\s+\\$?([\\d.]+)\\s*$","i");
+  const contribution=new RegExp("^(.+?)\\s+("+months+")\\s+(\\d{4})\\s+(REM|GRA|RET|LEY|COM)\\s+\\$?\\s*([\\d.]+)\\s+\\$?\\s*([\\d.]+)\\s*$","i");
   for(const chunk of chunks) {
     const info=chunk.match(/([\s\S]*?),\s*Rut\s*:\s*([\d.\-kK]+)/i);
     if(!info)continue;
