@@ -280,15 +280,18 @@ async function parseTalanaAttendancePdf(file: File): Promise<{ headers: string[]
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
       const page = await document.getPage(pageNumber);
       const content = await page.getTextContent();
-      const tokens: PositionedPdfToken[] = content.items
-        .filter((item: unknown): item is { str: string; transform: number[]; width?: number } =>
-          Boolean(item && typeof item === "object" && "str" in item && typeof (item as { str?: unknown }).str === "string" && (item as { str: string }).str.trim()))
-        .map(item => ({
-          str: item.str.trim(),
-          x: Number(item.transform[4]) || 0,
-          y: Number(item.transform[5]) || 0,
-          width: Number(item.width) || 0
-        }));
+      const rawItems = content.items as unknown as Array<{ str?: unknown; transform?: unknown; width?: unknown }>;
+      const tokens: PositionedPdfToken[] = rawItems
+        .filter(item => typeof item.str === "string" && item.str.trim() && Array.isArray(item.transform))
+        .map(item => {
+          const transform = item.transform as number[];
+          return {
+            str: (item.str as string).trim(),
+            x: Number(transform[4]) || 0,
+            y: Number(transform[5]) || 0,
+            width: Number(item.width) || 0
+          };
+        });
       if (!tokens.length) continue;
       pagesWithText++;
       const lines = groupPdfVisualLines(tokens);
