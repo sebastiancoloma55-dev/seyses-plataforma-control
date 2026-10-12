@@ -325,8 +325,12 @@ elif section == "Importar y conciliar":
                         raise RuntimeError("No se pudo crear el registro de proceso.")
                     process_id = run_result.data[0]["id"]
                     workers = worker_payloads(preview, process_id)
-                    if workers:
-                        client.table("workers").upsert(workers, on_conflict="rut").execute()
+                    for worker_payload in workers:
+                        current_worker = client.table("workers").select("id").eq("rut", worker_payload["rut"]).limit(1).execute()
+                        if current_worker.data:
+                            client.table("workers").update(worker_payload).eq("id", current_worker.data[0]["id"]).execute()
+                        else:
+                            client.table("workers").insert(worker_payload).execute()
                     differences = preview[preview["categoria"] != ""]
                     diff_payloads = [{
                         "process_run_id": process_id,
