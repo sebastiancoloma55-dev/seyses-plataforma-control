@@ -59,8 +59,8 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; aliases: strin
   { key: "work_date", label: "Fecha del registro", required: true, aliases: ["fecha","fecha asistencia","date","dia","día","fecha turno","fecha marcacion","fecha marcación","work date"] },
   { key: "shift_name", label: "Turno asignado", aliases: ["turno","shift","turno asignado","jornada","codigo turno","código turno","shift name","assigned shift"] },
   { key: "scheduled_duration", label: "Horas asignadas (total diario)", aliases: ["horas asign","horas asignadas","assigned hours","planned hours","scheduled hours","planned duration"] },
-  { key: "scheduled_start", label: "Inicio turno planificado", aliases: ["entrada planificada","hora inicio turno","inicio turno","scheduled start","shift start","entrada programada","hora entrada programada","inicio programado"] },
-  { key: "scheduled_end", label: "Fin turno planificado", aliases: ["salida programada","hora salida turno","fin turno","scheduled end","shift end","fin programado"] },
+  { key: "scheduled_start", label: "Inicio turno planificado", aliases: ["entrada turno","entrada planificada","hora inicio turno","inicio turno","scheduled start","shift start","entrada programada","hora entrada programada","inicio programado"] },
+  { key: "scheduled_end", label: "Fin turno planificado", aliases: ["salida turno","salida programada","hora salida turno","fin turno","scheduled end","shift end","fin programado"] },
   { key: "actual_start", label: "Primera entrada real", aliases: ["entrada","marcacion entrada","marcación entrada","check in","punch in","hora ingreso","hora entrada real","first in","actual start","entrada real"] },
   { key: "actual_end", label: "Última salida real", aliases: ["salida","marcacion salida","marcación salida","check out","punch out","hora salida","ultima salida","última salida","last out","actual end","salida real"] },
   { key: "worked_duration", label: "Horas trabajadas (si vienen totalizadas)", aliases: ["horas trabajadas","horas asis","horas asistencia","horas asistidas","horas totales","total horas","worked hours","horas ordinarias","duration","total hrs","horas efectivas","worked duration","total trabajado"] },
@@ -186,7 +186,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     setError(""); setNotice(""); setLoadingSaved(true);
     try {
       const {data,error:queryError} = await getSupabase().from("attendance_records")
-        .select("source_row,worker_key,worker_rut,worker_name,branch,work_date,shift_name,scheduled_start,scheduled_end,actual_start,actual_end,scheduled_minutes,worked_minutes,overtime_minutes,late_minutes,attendance_status")
+        .select("source_row,worker_key,worker_rut,worker_name,branch,job_title,supervisor,contract_hours_weekly,on_payroll,permission_note,work_date,shift_name,scheduled_start,scheduled_end,actual_start,actual_end,scheduled_minutes,worked_minutes,overtime_minutes,late_minutes,attendance_status")
         .eq("import_id",item.id).order("work_date",{ascending:true}).limit(10000);
       if (queryError) throw queryError;
       setSavedRows((data ?? []) as unknown as AttendanceRow[]);
