@@ -211,8 +211,9 @@ if section == "Importar y conciliar":
             m2.metric("Registros accesos", access_info["valid_unique_ruts"])
             m3.metric("Personas conciliadas", len(preview))
             m4.metric("Diferencias detectadas", int((preview["categoria"] != "").sum()))
-            if payroll_info["duplicate_ruts"] or access_info["duplicate_ruts"]:
-                st.warning("Se detectaron RUT duplicados. Se conservará la primera fila por RUT para la vista previa; revisa los archivos fuente antes de confirmar.")
+            has_duplicates = bool(payroll_info["duplicate_ruts"] or access_info["duplicate_ruts"])
+            if has_duplicates:
+                st.warning("Se detectaron RUT duplicados. Se conservará la primera fila solo para la vista previa, pero no se permitirá guardar hasta corregir los duplicados en los archivos fuente.")
                 with st.expander("Ver RUT duplicados"):
                     st.write({"Nómina": payroll_info["duplicate_ruts"], "Accesos": access_info["duplicate_ruts"]})
             if payroll_info["rows_without_rut"] or access_info["rows_without_rut"]:
@@ -225,7 +226,7 @@ if section == "Importar y conciliar":
             st.caption("Los archivos se procesan en memoria para la vista previa. La confirmación guarda los registros y metadatos de proceso; no se suben los archivos originales a Storage.")
             confirm_key = f"seyses_confirm_{state['payroll_meta']['sha256'][:8]}_{state['access_meta']['sha256'][:8]}"
             confirm = st.checkbox("Confirmo que revisé la vista previa y autorizo guardar los resultados en la base independiente de SEYSES.", key=confirm_key)
-            if st.button("Confirmar y guardar en SEYSES", type="primary", disabled=not confirm, use_container_width=True):
+            if st.button("Confirmar y guardar en SEYSES", type="primary", disabled=(not confirm) or has_duplicates, use_container_width=True):
                 process_id = None
                 try:
                     run_result = client.table("process_runs").insert({
