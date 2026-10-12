@@ -20,8 +20,10 @@ export default function RecuperarCuenta() {
       });
       if (resetError) throw resetError;
       setMessage("Si el correo está registrado, recibirás un enlace para crear una contraseña nueva. Revisa también Spam.");
-    } catch {
-      setError("No se pudo solicitar el enlace. Verifica la configuración de Auth y las URLs de redirección en Supabase.");
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : "Error desconocido";
+      console.error("SEYSES password recovery failed:", detail);
+      setError(`No se pudo solicitar el enlace. Detalle: ${detail}. Si indica redirect URL no permitida, agrega la URL de este sitio en Supabase > Authentication > URL Configuration. Si indica SMTP/email, revisa el proveedor de correo de Auth.`);
     } finally { setBusy(false); }
   }
 
