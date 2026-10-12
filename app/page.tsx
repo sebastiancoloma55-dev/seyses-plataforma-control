@@ -121,7 +121,7 @@ export default function Home() {
     setError("");
     try {
       const supabase = getSupabase();
-      const names = ["workers", "process_runs", "discrepancies", "processed_files", "audit_logs"];
+      const names = ["workers", "process_runs", "discrepancies", "processed_files", "audit_logs", "attendance_imports", "attendance_records"];
       const results = await Promise.all(names.map(async (table) => {
         const { count, error: queryError } = await supabase.from(table).select("*", { count: "exact", head: true });
         return [table, queryError ? null : (count ?? 0)] as const;
@@ -201,10 +201,14 @@ export default function Home() {
       {error && <div className="notice error" role="alert">{error}</div>}
       {section === "Resumen ejecutivo" && <>
         <div className="grid">
-          <Metric label="Trabajadores" value={count("workers")} foot="Registros visibles para tu perfil" />
+          <Metric label="Trabajadores" value={count("workers")} foot="Maestro de trabajadores" />
           <Metric label="Procesos" value={count("process_runs")} foot="Ejecuciones registradas" />
           <Metric label="Diferencias" value={count("discrepancies")} foot="Hallazgos disponibles según permisos" />
-          <Metric label="Archivos" value={count("processed_files")} foot="Metadatos registrados" />
+          <Metric label="Archivos" value={count("processed_files")} foot="Metadatos y trazabilidad" />
+        </div>
+        <div className="grid">
+          <Metric label="Reportes asistencia" value={count("attendance_imports")} foot="Importaciones normalizadas" />
+          <Metric label="Registros asistencia" value={count("attendance_records")} foot="Filas por trabajador y fecha" />
         </div>
         <div className="panel"><div className="section-head"><h2>Espacios de trabajo</h2><span className="muted" style={{fontSize:".8rem"}}>Navegación por módulos</span></div><div className="module-grid">{modules.filter(m => m.id !== "Resumen ejecutivo").map(item => <button key={item.id} className="module-card" onClick={() => setSection(item.id)}><span className="status">{item.icon} Módulo</span><b>{item.title}</b><span>{item.desc}</span></button>)}</div></div>
       </>}
