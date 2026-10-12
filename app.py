@@ -5,8 +5,8 @@ import plotly.express as px
 import streamlit as st
 
 from sesyes_supabase import sign_in, sign_out, log_event, get_audit_logs
-from sesyes_imports import read_spreadsheet, reconcile_sources, worker_payloads
-from sesyes_previred import procesar_pdf_previred, generar_excel_formato_previred
+from seyses_imports import read_spreadsheet, reconcile_sources, worker_payloads
+from seyses_previred import procesar_pdf_previred, generar_excel_formato_previred
 
 st.set_page_config(
     page_title="SEYSES | Centro de control",
