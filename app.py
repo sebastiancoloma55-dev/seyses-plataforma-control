@@ -229,6 +229,13 @@ if section == "Importar y conciliar":
             if st.button("Confirmar y guardar en SEYSES", type="primary", disabled=(not confirm) or has_duplicates, use_container_width=True):
                 process_id = None
                 try:
+                    existing = client.table("process_runs").select("id, status, created_at").contains("metadata", {
+                        "payroll_sha256": state["payroll_meta"]["sha256"],
+                        "access_sha256": state["access_meta"]["sha256"],
+                    }).limit(1).execute()
+                    if existing.data:
+                        st.warning("Esta pareja de archivos ya figura en el historial. No se repetirá la carga automáticamente.")
+                        st.stop()
                     run_result = client.table("process_runs").insert({
                         "created_by": user.get("user_id"),
                         "process_type": "conciliacion_nomina_accesos",
