@@ -155,101 +155,106 @@ function currentMonthEnd() { const d = new Date(); return `${d.getFullYear()}-${
 
 type PositionedPdfToken = { str: string; x: number; y: number; width: number };
 type PdfVisualLine = { y: number; items: PositionedPdfToken[] };
-type TalanaPdfColumn = "Fecha" | "Turno" | "Entrada" | "Salida" | "H. Trabajadas" | "H. Ext." | "Desc." | "Reemplazo" | "Justificación" | "Horas Asignadas";
-type TalanaPdfAnchors = Map<TalanaPdfColumn, number>;
+type PdfFieldAnchor = { key: FieldKey; x: number };
 
-const TALANA_DATE_PATTERN = /\b(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{4}|\d{4}[\/.-]\d{1,2}[\/.-]\d{1,2})\b/;
+const PDF_DATE_PATTERN = /\b(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{4}|\d{4}[\/.-]\d{1,2}[\/.-]\d{1,2})\b/;
 
 function groupPdfVisualLines(tokens: PositionedPdfToken[]): PdfVisualLine[] {
   const sorted = [...tokens].sort((a, b) => b.y - a.y || a.x - b.x);
   const lines: PdfVisualLine[] = [];
   for (const token of sorted) {
-    let target = lines.find(line => Math.abs(line.y - token.y) <= 2.8);
-    if (!target) {
-      target = { y: token.y, items: [] };
-      lines.push(target);
-    }
+    let target = lines.find(line => Math.abs(line.y - token.y) <= 6.5);
+    if (!target) { target = { y: token.y, items: [] }; lines.push(target); }
     target.items.push(token);
     target.items.sort((a, b) => a.x - b.x);
+    target.y = target.items.reduce((sum, item) => sum + item.y, 0) / target.items.length;
   }
   return lines.sort((a, b) => b.y - a.y);
 }
 
-function pdfHeaderColumn(items: PositionedPdfToken[], index: number): TalanaPdfColumn | null {
-  const value = norm(items[index].str);
-  if (value === "fecha") return "Fecha";
-  if (value === "turno") return "Turno";
-  if (value === "entrada") return "Entrada";
-  if (value === "salida") return "Salida";
-  if (value.includes("trabajad")) return "H. Trabajadas";
-  if (value === "ext" || value.includes("h ext") || value.includes("extras") || value === "extra") return "H. Ext.";
-  if (value.startsWith("desc") || value === "atraso" || value === "atrasos") return "Desc.";
-  if (value.includes("reemplazo")) return "Reemplazo";
-  if (value.includes("justific")) return "Justificación";
-  if (value.includes("asignad")) return "Horas Asignadas";
-  return null;
+function detectPdfField(phrase: string): FieldKey | null {
+  const value = norm(phrase);
+  if (!value || value.length > 45) return null;
+  if (/^(fecha|date|dia|dia asistencia|fecha turno|work date)$/.test(value) || value.startsWith("fecha asistencia")) return "work_date";
+  if (value === "rut" || value === "run" || value.includes("rut trabajador") || value.includes("numero documento")) return "worker_rut";
+  if (value === "id" || value.includes("codigo empleado") || value.includes("employee id") || value === "legajo") return "worker_id";
+  if (value.includes("nombre") || value.includes("trabajador") || value.includes("colaborador") || value === "empleado" || value.includes("employee name")) return "worker_name";
+  if (value === "turno" || value.includes("turno asignado") || value === "jornada" || value === "shift") return "shift_name";
+  if ((value.includes("hora") || value.startsWith("h ")) && value.includes("asignad")) return "scheduled_duration";
+  if (value.includes("asignad") && (value.includes("hora") || value.includes("duracion") || value.includes("duration"))) return "scheduled_duration";
+  if (value.includes("trabajad") && (value.includes("hora") || value.startsWith("h ") || value.includes("worked"))) return "worked_duration";
+  if (value.includes("extra") || value === "h ext" || value === "hhee" || value === "overtime") return "overtime_duration";
+  if (value.startsWith("desc") || value.includes("atraso") || value.includes("late minutes")) return "late_duration";
+  if (value.includes("justific") || value === "permiso" || value.includes("observacion") || value.includes("incidencia")) return "permission_note";
+  if (value.includes("reemplazo")) return "permission_note";
+  if (value.includes("colacion") || value.includes("descanso") || value === "break") return "break_duration";
+  if (value.includes("supervisor") || value === "jefe") return "supervisor";
+  if (value.includes("sucursal") || value === "local" || value === "tienda" || value === "branch" || value === "site") return "branch";
+  if (value.includes("cargo") || value === "puesto" || value === "job title") return "job_title";
+  if ((value.includes("entrada") || value === "ingreso" || value === "check in") && /(planific|programad|turno|scheduled|planned)/.test(value)) return "scheduled_start";
+  if ((value.includes("salida") || value === "egreso" || value === "check out") && /(planific|programad|turno|scheduled|planned)/.test(value)) return "scheduled_end";
+  if (value === "entrada" || value === "ingreso" || value.includes("marcacion entrada") || value === "check in" || value.includes("actual start") || value.includes("primera entrada")) return "actual_start";
+  if (value === "salida" || value === "egreso" || value.includes("marcacion salida") || value === "check out" || value.includes("actual end") || value.includes("ultima salida")) return "actual_end";
+  const exact = FIELDS.find(field => field.aliases.some(alias => norm(alias) === value));
+  return exact?.key ?? null;
 }
 
-function pdfColumnStart(line: PdfVisualLine, index: number, column: TalanaPdfColumn): number {
-  const item = line.items[index];
-  let x = item.x;
-  const previous = line.items[index - 1];
-  if (previous && item.x - previous.x < 46) {
-    const previousText = norm(previous.str);
-    if ((column === "H. Trabajadas" || column === "H. Ext.") && previousText === "h") x = previous.x;
-    if (column === "Horas Asignadas" && (previousText === "horas" || previousText === "hora")) x = previous.x;
-  }
-  return x;
-}
-
-function findTalanaPdfHeader(lines: PdfVisualLine[]): { y: number; anchors: TalanaPdfAnchors } | null {
-  let best: PdfVisualLine | null = null;
-  let bestScore = 0;
-  for (const line of lines) {
-    const found = new Set<TalanaPdfColumn>();
-    line.items.forEach((_, index) => {
-      const key = pdfHeaderColumn(line.items, index);
-      if (key) found.add(key);
-    });
-    const score = found.size + (found.has("Fecha") ? 2 : 0) + (found.has("Turno") ? 1 : 0);
-    if (score > bestScore) {
-      best = line;
-      bestScore = score;
+function pdfLinePhrases(line: PdfVisualLine): Array<{ phrase: string; x: number }> {
+  const items = line.items;
+  const found: Array<{ phrase: string; x: number }> = [];
+  for (let start = 0; start < items.length; start++) {
+    let phrase = "";
+    for (let end = start; end < Math.min(items.length, start + 4); end++) {
+      if (end > start) {
+        const gap = items[end].x - (items[end - 1].x + items[end - 1].width);
+        if (gap > 38 || items[end].x - items[start].x > 150) break;
+      }
+      phrase = (phrase + " " + items[end].str).trim();
+      found.push({ phrase, x: items[start].x });
     }
   }
-  if (!best || bestScore < 5) return null;
+  return found;
+}
 
-  const nearby = lines
-    .filter(line => Math.abs(line.y - best!.y) <= 20)
-    .sort((a, b) => Math.abs(a.y - best!.y) - Math.abs(b.y - best!.y));
-  const anchors: TalanaPdfAnchors = new Map();
-  for (const line of nearby) {
-    line.items.forEach((_, index) => {
-      const key = pdfHeaderColumn(line.items, index);
-      if (key && !anchors.has(key)) anchors.set(key, pdfColumnStart(line, index, key));
-    });
-  }
-
-  // When PDF text splits "H. Trabajadas" or "Horas Asignadas" across items/lines,
-  // recover the left edge of the label so values align with the correct column.
-  for (const key of ["H. Trabajadas", "H. Ext.", "Horas Asignadas"] as TalanaPdfColumn[]) {
-    const currentX = anchors.get(key);
-    if (currentX === undefined) continue;
-    const prefix = key === "Horas Asignadas" ? ["horas", "hora"] : ["h"];
-    let leftmost = currentX;
-    for (const line of nearby) {
-      for (const item of line.items) {
-        const itemText = norm(item.str);
-        if (prefix.includes(itemText) && item.x < currentX && currentX - item.x < 48) {
-          leftmost = Math.min(leftmost, item.x);
-        }
+function findUniversalPdfHeader(lines: PdfVisualLine[]): { bottomY: number; anchors: PdfFieldAnchor[] } | null {
+  let best: { centerY: number; score: number; matches: Array<{key:FieldKey;x:number;y:number}> } | null = null;
+  for (const center of lines) {
+    const band = lines.filter(line => Math.abs(line.y - center.y) <= 15);
+    const matches: Array<{key:FieldKey;x:number;y:number}> = [];
+    const seen = new Set<string>();
+    for (const line of band) {
+      for (const phrase of pdfLinePhrases(line)) {
+        const key = detectPdfField(phrase.phrase);
+        if (!key) continue;
+        const signature = key + ":" + Math.round(phrase.x);
+        if (seen.has(signature)) continue;
+        seen.add(signature);
+        matches.push({key,x:phrase.x,y:line.y});
       }
     }
-    anchors.set(key, leftmost);
+    const unique = new Set(matches.map(match => match.key));
+    const hasIdentity = unique.has("worker_name") || unique.has("worker_rut") || unique.has("worker_id");
+    const hasTime = unique.has("worked_duration") || unique.has("scheduled_duration") || unique.has("actual_start") || unique.has("actual_end");
+    if (!unique.has("work_date") || !hasIdentity || !hasTime) continue;
+    const score = unique.size + (unique.has("shift_name") ? 2 : 0) + (unique.has("worked_duration") ? 2 : 0);
+    if (!best || score > best.score) best = {centerY:center.y,score,matches};
   }
-
-  if (!anchors.has("Fecha") || !anchors.has("Turno") || !anchors.has("H. Trabajadas")) return null;
-  return { y: best.y, anchors };
+  if (!best) return null;
+  const anchors = new Map<FieldKey, {x:number;distance:number}>();
+  for (const match of best.matches) {
+    const distance = Math.abs(match.y - best.centerY);
+    const previous = anchors.get(match.key);
+    if (!previous || distance < previous.distance) anchors.set(match.key,{x:match.x,distance});
+  }
+  const sorted = [...anchors.entries()].map(([key,value])=>({key,x:value.x,distance:value.distance})).sort((a,b)=>a.x-b.x);
+  const uniqueAnchors: PdfFieldAnchor[] = [];
+  for (const item of sorted) {
+    if (uniqueAnchors.some(existing=>existing.key===item.key)) continue;
+    if (uniqueAnchors.length && Math.abs(uniqueAnchors[uniqueAnchors.length-1].x-item.x)<8) continue;
+    uniqueAnchors.push({key:item.key,x:item.x});
+  }
+  if (!uniqueAnchors.some(anchor=>anchor.key==="work_date")) return null;
+  return {bottomY:Math.min(...best.matches.map(match=>match.y))-2,anchors:uniqueAnchors};
 }
 
 function extractPdfLabelValue(lines: PdfVisualLine[], label: string): string {
@@ -267,14 +272,15 @@ function extractPdfLabelValue(lines: PdfVisualLine[], label: string): string {
   return "";
 }
 
-async function parseTalanaAttendancePdf(file: File): Promise<{ headers: string[]; rows: RawRow[]; pages: number }> {
+async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows: RawRow[]; pages: number }> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
   const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-  const headers = ["RUT", "Nombre empleado", "Sucursal", "Fecha", "Turno", "Entrada", "Salida", "H. Trabajadas", "H. Ext.", "Desc.", "Reemplazo", "Justificación", "Horas Asignadas"];
   const rows: RawRow[] = [];
-  let defaultAnchors: TalanaPdfAnchors | null = null;
+  const discoveredKeys = new Set<FieldKey>();
+  let rememberedHeader: { bottomY:number; anchors:PdfFieldAnchor[] } | null = null;
   let pagesWithText = 0;
+  const rutPattern = /\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
 
   try {
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
@@ -285,81 +291,78 @@ async function parseTalanaAttendancePdf(file: File): Promise<{ headers: string[]
         .filter(item => typeof item.str === "string" && item.str.trim() && Array.isArray(item.transform))
         .map(item => {
           const transform = item.transform as number[];
-          return {
-            str: (item.str as string).trim(),
-            x: Number(transform[4]) || 0,
-            y: Number(transform[5]) || 0,
-            width: Number(item.width) || 0
-          };
+          return {str:(item.str as string).trim(),x:Number(transform[4])||0,y:Number(transform[5])||0,width:Number(item.width)||0};
         });
       if (!tokens.length) continue;
       pagesWithText++;
       const lines = groupPdfVisualLines(tokens);
-      const header = findTalanaPdfHeader(lines);
-      if (header) defaultAnchors = header.anchors;
-      const anchors = header?.anchors ?? defaultAnchors;
-      if (!anchors) continue;
+      const detectedHeader = findUniversalPdfHeader(lines);
+      if (detectedHeader) rememberedHeader = detectedHeader;
+      const header = detectedHeader ?? rememberedHeader;
+      if (!header) continue;
 
-      const pageText = lines.map(line => line.items.map(item => item.str).join(" ")).join("\n");
-      const rutMatch = pageText.match(/\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/);
-      const rut = rutMatch ? rutMatch[0].toUpperCase() : "";
-      const employee = extractPdfLabelValue(lines, "Empleado");
-      const branch = extractPdfLabelValue(lines, "Sucursal");
-      const rowLines = lines.filter(line => {
-        const joined = line.items.map(item => item.str).join(" ");
-        return TALANA_DATE_PATTERN.test(joined) && (header ? line.y < header.y - 2 : true);
+      const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+      const normalizedPageText = pageText.replace(/\s+/g," ");
+      const rut = normalizedPageText.match(rutPattern)?.[0]?.toUpperCase() ?? "";
+      const employee = extractPdfLabelValue(lines,"Empleado") || extractPdfLabelValue(lines,"Nombre");
+      const branch = extractPdfLabelValue(lines,"Sucursal");
+      const ordered = [...header.anchors].sort((a,b)=>a.x-b.x);
+      const candidateLines = lines.filter(line=>{
+        const joined=line.items.map(item=>item.str).join(" ");
+        return line.y < header.bottomY && PDF_DATE_PATTERN.test(joined);
       });
+      const processedRows = new Set<string>();
 
-      const sortedAnchors = [...anchors.entries()].sort((a, b) => a[1] - b[1]);
-      if (sortedAnchors.length < 3) continue;
-      for (const line of rowLines) {
-        const lineText = line.items.map(item => item.str).join(" ");
-        const dateMatch = lineText.match(TALANA_DATE_PATTERN);
+      for (const line of candidateLines) {
+        const rowItems = tokens.filter(item=>Math.abs(item.y-line.y)<=5.5).sort((a,b)=>a.x-b.x);
+        const rowText = rowItems.map(item=>item.str).join(" ");
+        const dateMatch = rowText.match(PDF_DATE_PATTERN);
         if (!dateMatch) continue;
         const date = parseDate(dateMatch[0]);
         if (!date) continue;
-        const cells = new Map<TalanaPdfColumn, string[]>();
-        for (const [key] of sortedAnchors) cells.set(key, []);
-        for (const item of line.items) {
-          let columnIndex = 0;
-          for (let i = 1; i < sortedAnchors.length; i++) {
-            const boundary = (sortedAnchors[i - 1][1] + sortedAnchors[i][1]) / 2;
-            if (item.x >= boundary) columnIndex = i;
-            else break;
+        const rowSignature = date + ":" + Math.round(line.y/4);
+        if (processedRows.has(rowSignature)) continue;
+        processedRows.add(rowSignature);
+        const cells = new Map<FieldKey,string[]>();
+        for (const anchor of ordered) cells.set(anchor.key,[]);
+        for (const item of rowItems) {
+          let index = 0;
+          for (let i=1;i<ordered.length;i++) {
+            const boundary=(ordered[i-1].x+ordered[i].x)/2;
+            if(item.x>=boundary) index=i; else break;
           }
-          const column = sortedAnchors[columnIndex][0];
-          cells.get(column)?.push(item.str);
+          cells.get(ordered[index].key)?.push(item.str);
         }
-        const value = (column: TalanaPdfColumn) => (cells.get(column) || []).join(" ").replace(/\s+/g, " ").trim();
-        const shift = value("Turno").replace(TALANA_DATE_PATTERN, "").trim();
-        rows.push({
-          "RUT": rut,
-          "Nombre empleado": employee,
-          "Sucursal": branch,
-          "Fecha": date,
-          "Turno": shift,
-          "Entrada": value("Entrada"),
-          "Salida": value("Salida"),
-          "H. Trabajadas": value("H. Trabajadas"),
-          "H. Ext.": value("H. Ext."),
-          "Desc.": value("Desc."),
-          "Reemplazo": value("Reemplazo"),
-          "Justificación": value("Justificación"),
-          "Horas Asignadas": value("Horas Asignadas")
-        });
+        const cell = (key:FieldKey) => (cells.get(key)||[]).join(" ").replace(/\s+/g," ").trim();
+        const row: RawRow = {};
+        for (const anchor of ordered) {
+          const field = FIELDS.find(item=>item.key===anchor.key);
+          if (!field) continue;
+          discoveredKeys.add(anchor.key);
+          row[field.label] = anchor.key==="work_date" ? date : cell(anchor.key);
+        }
+        const rutAnchor = ordered.some(anchor=>anchor.key==="worker_rut");
+        const nameAnchor = ordered.some(anchor=>anchor.key==="worker_name");
+        const rutField = FIELDS.find(item=>item.key==="worker_rut")!;
+        const nameField = FIELDS.find(item=>item.key==="worker_name")!;
+        if (!rutAnchor) { row[rutField.label] = rut; discoveredKeys.add("worker_rut"); }
+        if (!nameAnchor) { row[nameField.label] = employee; discoveredKeys.add("worker_name"); }
+        const branchAnchor = ordered.some(anchor=>anchor.key==="branch");
+        if (!branchAnchor && branch) {
+          row[FIELDS.find(item=>item.key==="branch")!.label] = branch;
+          discoveredKeys.add("branch");
+        }
+        row[FIELDS.find(item=>item.key==="work_date")!.label] = date;
+        if (String(row[rutField.label]??"").trim() || String(row[nameField.label]??"").trim()) rows.push(row);
       }
     }
-  } finally {
-    await document.destroy();
-  }
+  } finally { await document.destroy(); }
 
-  if (!pagesWithText) {
-    throw new Error("El PDF no contiene texto seleccionable. Puede ser un escaneo o una imagen y requiere OCR; prueba descargarlo nuevamente desde Talana como PDF normal.");
-  }
-  if (!rows.length) {
-    throw new Error("Pude abrir el PDF, pero no detecté filas diarias de Talana. Verifica que sea el “Reporte individual de asistencia” con columnas Fecha, Turno y H. Trabajadas. Si puedes, descarga el reporte de asistencia en Excel desde Talana.");
-  }
-  return { headers, rows, pages: document.numPages };
+  if (!pagesWithText) throw new Error("El PDF no tiene texto seleccionable. Si es un escaneo o una imagen, necesitará OCR; por ahora descarga el reporte como PDF digital o Excel desde el ERP.");
+  if (!rows.length) throw new Error("No pude detectar filas del reporte. El lector admite encabezados comunes de distintos ERP, pero el PDF debe contener una tabla digital con fecha y datos del trabajador. Descarga el reporte como Excel/CSV o comparte una copia de prueba anonimizada para añadir ese formato.");
+  const orderedKeys = [...discoveredKeys];
+  const headerKeys = orderedKeys.filter(key=>rows.some(row=>Object.prototype.hasOwnProperty.call(row,FIELDS.find(field=>field.key===key)!.label)));
+  return {headers:headerKeys.map(key=>FIELDS.find(field=>field.key===key)!.label),rows,pages:document.numPages};
 }
 
 function parseLateMinutes(value: unknown): number | null {
@@ -436,15 +439,15 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     if (!selected) return;
     if (selected.size > 15*1024*1024) { setError("El archivo supera 15 MB. El máximo permitido es 15 MB."); return; }
     const isPdf = /\.pdf$/i.test(selected.name);
-    if (!isPdf && !/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible. Usa Excel (.xlsx/.xls), CSV (.csv) o el PDF del Reporte individual de asistencia de Talana."); return; }
+    if (!isPdf && !/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible. Usa Excel (.xlsx/.xls), CSV (.csv) o un PDF digital de asistencia con tabla y encabezados reconocibles."); return; }
     if (isPdf) {
       try {
-        const parsedPdf = await parseTalanaAttendancePdf(selected);
+        const parsedPdf = await parseAttendancePdf(selected);
         const cols = parsedPdf.headers;
         const objects = parsedPdf.rows;
         if (!objects.length || !cols.length) throw new Error("El PDF no contiene filas de asistencia utilizables.");
         if (objects.length > 150000) throw new Error("El reporte supera 150.000 filas. Divide el archivo por períodos más pequeños.");
-        setErp("Talana");
+        setErp(/talana/i.test(selected.name) ? "Talana" : "ERP genérico / mapeo automático");
         setHeaders(cols); setRawRows(objects);
         const next: Partial<Record<FieldKey,string>> = {};
         for (const field of FIELDS) {
@@ -456,7 +459,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
           const dates = objects.map(row => parseDate(row[next.work_date!])).filter(Boolean).sort();
           if (dates.length) { setPeriodStart(dates[0]); setPeriodEnd(dates[dates.length - 1]); }
         }
-        setNotice("PDF de Talana leído en el navegador: " + objects.length.toLocaleString("es-CL") + " jornadas detectadas en " + parsedPdf.pages + " página(s). Revisa el mapeo y las cifras antes de importar; los PDF pueden variar según el formato del reporte.");
+        setNotice("PDF de asistencia leído en el navegador: " + objects.length.toLocaleString("es-CL") + " jornadas detectadas en " + parsedPdf.pages + " página(s). Revisa el mapeo y las cifras antes de importar; los PDF sin texto seleccionable o con tablas no estándar necesitan un adaptador específico.");
       } catch (e) {
         setError(e instanceof Error ? e.message : "No se pudo leer el PDF de Talana.");
       }
@@ -651,8 +654,8 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
 
   return <div className="attendance-module">
     <section className="panel">
-      <div className="section-head"><h2>1. Cargar reporte de cualquier ERP</h2><span className="status">Excel / CSV / PDF Talana</span></div>
-      <p className="muted">Sube un Excel o CSV de asistencia, o el PDF del Reporte individual de asistencia de Talana. El analizador detecta las columnas, permite revisar el mapeo y calcula horas por trabajador.</p>
+      <div className="section-head"><h2>1. Cargar reporte de cualquier ERP</h2><span className="status">Excel / CSV / PDF ERP</span></div>
+      <p className="muted">Sube reportes Excel/CSV de distintos ERP o PDF digitales de asistencia. Detecta encabezados comunes, permite mapear columnas manualmente y totaliza horas por trabajador. Los PDF escaneados requieren OCR, que no está habilitado.</p>
       <div className="attendance-grid">
         <div className="field"><label htmlFor="attendance-erp">Sistema de origen</label><select id="attendance-erp" value={erp} onChange={e=>setErp(e.target.value)}>{ERP_OPTIONS.map(o=><option key={o}>{o}</option>)}</select></div>
         {erp==="Otro" && <div className="field"><label htmlFor="attendance-erp-custom">Nombre de ERP</label><input id="attendance-erp-custom" value={customErp} onChange={e=>setCustomErp(e.target.value)} placeholder="Nombre del sistema" /></div>}
