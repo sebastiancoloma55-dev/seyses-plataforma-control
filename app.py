@@ -406,8 +406,9 @@ elif section == "Resumen ejecutivo":
             runs["created_at"] = pd.to_datetime(runs["created_at"], errors="coerce", utc=True)
             runs = runs.dropna(subset=["created_at"])
             if not runs.empty:
-                runs["Fecha"] = runs["created_at"].dt.strftime("%d-%m")
-                trend = runs.groupby("Fecha", as_index=False).size().rename(columns={"size": "Procesos"})
+                runs["Fecha"] = runs["created_at"].dt.floor("D")
+                trend = runs.groupby("Fecha", as_index=False).size().rename(columns={"size": "Procesos"}).sort_values("Fecha")
+                trend["Fecha"] = trend["Fecha"].dt.strftime("%d %b")
                 fig = px.line(trend, x="Fecha", y="Procesos", markers=True)
                 fig.update_traces(line_color="#6c5ce7", line_width=3, marker_size=7)
                 st.plotly_chart(style_chart(fig), use_container_width=True, config={"displayModeBar": False})
