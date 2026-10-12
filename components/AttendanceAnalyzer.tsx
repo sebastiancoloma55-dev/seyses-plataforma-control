@@ -44,7 +44,7 @@ function aggregateAttendance(rows: AttendanceRow[]): WorkerSummary[] {
 const FIELDS: { key: FieldKey; label: string; required?: boolean; aliases: string[] }[] = [
   { key: "worker_rut", label: "RUT / DNI / documento", aliases: ["rut","run","dni","documento","cedula","identificacion","identificación","numero documento","número documento"] },
   { key: "worker_id", label: "ID / código trabajador", aliases: ["employee id","id empleado","codigo empleado","código empleado","legajo","matricula","matrícula","numero empleado","numero trabajador","worker id"] },
-  { key: "worker_name", label: "Nombre trabajador", required: true, aliases: ["nombre","trabajador","nombre completo","full name","employee name","colaborador","empleado","worker name","nombre empleado"] },
+  { key: "worker_name", label: "Nombre trabajador", aliases: ["nombre","trabajador","nombre completo","full name","employee name","colaborador","empleado","worker name","nombre empleado"] },
   { key: "branch", label: "Sucursal / sede", aliases: ["sucursal","local","tienda","branch","site","location","centro costo","centro de costo","departamento","department"] },
   { key: "work_date", label: "Fecha del registro", required: true, aliases: ["fecha","fecha asistencia","date","dia","día","fecha turno","fecha marcacion","fecha marcación","work date"] },
   { key: "shift_name", label: "Turno asignado", aliases: ["turno","shift","turno asignado","jornada","codigo turno","código turno","shift name","assigned shift"] },
@@ -206,7 +206,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
       const first = book.SheetNames[0];
       if (!first) throw new Error("El archivo no contiene hojas.");
       const sheet = book.Sheets[first];
-      const objects = XLSX.utils.sheet_to_json<RawRow>(sheet,{defval:"",raw:true,blankrows:false});
+      const objects = XLSX.utils.sheet_to_json<RawRow>(sheet,{defval:"",raw:false,blankrows:false});
       if (!objects.length) throw new Error("La hoja no contiene filas de datos.");
       if (objects.length > 10000) throw new Error("El reporte supera 10000 filas. Divídelo y procesa los segmentos por período.");
       const cols = Object.keys(objects[0]).map(String);
@@ -238,12 +238,14 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     const plannedEnd = asTime(value("scheduled_end"));
     const actualStart = asTime(value("actual_start"));
     const actualEnd = asTime(value("actual_end"));
-    const scheduled = plannedStart && plannedEnd ? durationBetween(plannedStart,plannedEnd) : 0;
-    const rawWorked = mapping.worked_duration ? parseDuration(value("worked_duration")) : null;
     const breakMins = mapping.break_duration ? (parseDuration(value("break_duration")) ?? parseTimeMinutes(value("break_duration")) ?? 0) : 0;
+    const scheduled = plannedStart && plannedEnd ? Math.max(0,durationBetween(plannedStart,plannedEnd)-breakMins) : 0;
+    const rawWorked = mapping.worked_duration ? parseDuration(value("worked_duration")) : null;
     const worked = rawWorked !== null ? rawWorked : (actualStart && actualEnd ? Math.max(0,durationBetween(actualStart,actualEnd)-breakMins) : 0);
     const rawOvertime = mapping.overtime_duration ? parseDuration(value("overtime_duration")) : null;
-    const late = plannedStart && actualStart ? Math.max(0,(parseTimeMinutes(actualStart) ?? 0)-(parseTimeMinutes(plannedStart) ?? 0)) : 0;
+    const startDelta = plannedStart && actualStart ? (parseTimeMinutes(actualStart) ?? 0)-(parseTimeMinutes(plannedStart) ?? 0) : 0;
+    const normalizedLate = startDelta < -720 ? startDelta + 1440 : startDelta > 720 ? startDelta - 1440 : startDelta;
+    const late = plannedStart && actualStart ? Math.max(0,normalizedLate) : 0;
     const workerKey = rut || employeeId || name;
     return [{
       source_row:index+2,
