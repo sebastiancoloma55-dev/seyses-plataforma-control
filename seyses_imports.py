@@ -28,10 +28,10 @@ def normalize_rut(value: Any) -> str:
     if pd.isna(value):
         return ""
     raw = str(value).strip().upper().replace(" ", "")
-    raw = re.sub(r"\\.0$", "", raw)
+    raw = re.sub(r"\.0$", "", raw)
     raw = raw.replace(".", "")
     raw = raw.replace("—", "-").replace("–", "-")
-    raw = re.sub(r"[^0-9K-]", "", raw)
+    raw = re.sub(r"\.0$", "", raw)
     raw = raw.replace("-", "")
     if len(raw) < 2:
         return ""
