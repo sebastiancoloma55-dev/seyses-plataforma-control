@@ -219,7 +219,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
       actual_end:actualEnd,
       scheduled_minutes:scheduled,
       worked_minutes:Math.max(0,worked),
-      overtime_minutes:Math.max(0,rawOvertime ?? Math.max(0,worked-scheduled)),
+      overtime_minutes:Math.max(0,rawOvertime ?? (scheduled > 0 ? Math.max(0,worked-scheduled) : 0)),
       late_minutes:late,
       attendance_status:text(value("attendance_status"))
     } satisfies AttendanceRow];
@@ -232,7 +232,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
       const key = r.worker_key;
       if (!map.has(key)) map.set(key,{key,rut:r.worker_rut,name:r.worker_name,branch:r.branch,days:new Set(),rows:0,assigned:new Set(),scheduled:0,worked:0,overtime:0,late:0});
       const g = map.get(key)!; g.days.add(r.work_date); g.rows++;
-      if (r.shift_name) g.assigned.add(r.shift_name);
+      if (r.shift_name) g.assigned.add(r.shift_name); else if (r.scheduled_start || r.scheduled_end) g.assigned.add(`${r.scheduled_start.slice(0,5) || "?"}–${r.scheduled_end.slice(0,5) || "?"}`);
       g.scheduled += r.scheduled_minutes; g.worked += r.worked_minutes; g.overtime += r.overtime_minutes; g.late += r.late_minutes;
       if (!g.branch && r.branch) g.branch = r.branch;
     }
@@ -259,6 +259,8 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         period_start:periodStart,
         period_end:periodEnd,
         file_sha256:hash,
+        file_size_bytes:file.size,
+        format:file.name.split(".").pop()?.toLowerCase(),
         rows_total:rawRows.length,
         rows_rejected:invalidRows,
         metadata:{ format:file.name.split(".").pop()?.toLowerCase(), mapping, columns:headers, imported_by:userId, filtered_to_period:true }
@@ -320,7 +322,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         <Metric label="Horas extra" value={fmtMinutes(mapped.reduce((s,r)=>s+r.overtime_minutes,0))} foot="Columna del ERP o excedente calculado"/>
         <Metric label="Atrasos" value={fmtMinutes(mapped.reduce((s,r)=>s+r.late_minutes,0))} foot="Comparación planificado vs real"/>
       </div>
-      <div className="table-wrap"><table><thead><tr><th>RUT / ID</th><th>Trabajador</th><th>Sucursal</th><th>Días</th><th>Turnos encontrados</th><th>Programadas</th><th>Trabajadas</th><th>Diferencia</th><th>H. extra</th><th>Atraso</th></tr></thead><tbody>{grouped.map(g=><tr key={g.key}><td>{g.rut||g.key}</td><td>{g.name}</td><td>{g.branch||"—"}</td><td>{g.days.size}</td><td>{[...g.assigned].join(", ")||"—"}</td><td>{fmtMinutes(g.scheduled)}</td><td>{fmtMinutes(g.worked)}</td><td>{fmtMinutes(Math.abs(g.worked-g.scheduled))}{g.worked<g.scheduled?" bajo programación":g.worked>g.scheduled?" sobre programación":""}</td><td>{fmtMinutes(g.overtime)}</td><td>{fmtMinutes(g.late)}</td></tr>)}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>RUT / ID</th><th>Trabajador</th><th>Sucursal</th><th>Días con registro</th><th>Turnos asignados</th><th>Programadas</th><th>Trabajadas</th><th>Diferencia</th><th>H. extra</th><th>Atraso</th></tr></thead><tbody>{grouped.map(g=><tr key={g.key}><td>{g.rut||g.key}</td><td>{g.name}</td><td>{g.branch||"—"}</td><td>{g.days.size}</td><td>{[...g.assigned].join(", ")||"—"}</td><td>{fmtMinutes(g.scheduled)}</td><td>{fmtMinutes(g.worked)}</td><td>{fmtMinutes(Math.abs(g.worked-g.scheduled))}{g.worked<g.scheduled?" bajo programación":g.worked>g.scheduled?" sobre programación":""}</td><td>{fmtMinutes(g.overtime)}</td><td>{fmtMinutes(g.late)}</td></tr>)}</tbody></table></div>
       <p className="muted attendance-footnote">Las horas se calculan por registro y luego se totalizan por trabajador para el período seleccionado. Una fila representa un evento/turno reportado por el ERP; no se inventan turnos faltantes. Revisa el mapeo antes de guardar.</p>
     </section>}
 
