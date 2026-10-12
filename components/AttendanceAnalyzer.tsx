@@ -161,6 +161,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
   const [periodStart, setPeriodStart] = useState(currentMonthStart);
   const [periodEnd, setPeriodEnd] = useState(currentMonthEnd);
   const [replaceExisting, setReplaceExisting] = useState(false);
+  const [selectedWorkerKey, setSelectedWorkerKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -325,6 +326,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
 
   const invalidRows = rawRows.length - mapped.length;
   const grouped = useMemo(() => aggregateAttendance(mapped),[mapped]);
+  const selectedWorkerRows = useMemo(() => selectedWorkerKey ? mapped.filter(r=>r.worker_key===selectedWorkerKey).sort((a,b)=>a.work_date.localeCompare(b.work_date)) : [],[mapped,selectedWorkerKey]);
   const savedGrouped = useMemo(() => aggregateAttendance(savedRows),[savedRows]);
 
   async function save() {
@@ -430,6 +432,12 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         <Metric label="Atrasos" value={fmtMinutes(mapped.reduce((s,r)=>s+r.late_minutes,0))} foot="Comparación planificado vs real"/>
       </div>
       <div className="table-wrap"><table><thead><tr><th>RUT / ID</th><th>Trabajador</th><th>Sucursal</th><th>Días con registro</th><th>Turnos asignados</th><th>Programadas</th><th>Trabajadas</th><th>Diferencia</th><th>H. extra</th><th>Atraso</th></tr></thead><tbody>{grouped.map(g=><tr key={g.key}><td>{g.rut||g.key}</td><td>{g.name}</td><td>{g.branch||"—"}</td><td>{g.days.size}</td><td>{[...g.assigned].join(", ")||"—"}</td><td>{fmtMinutes(g.scheduled)}</td><td>{fmtMinutes(g.worked)}</td><td>{fmtMinutes(Math.abs(g.worked-g.scheduled))}{g.worked<g.scheduled?" bajo programación":g.worked>g.scheduled?" sobre programación":""}</td><td>{fmtMinutes(g.overtime)}</td><td>{fmtMinutes(g.late)}</td></tr>)}</tbody></table></div>
+      <div className="attendance-grid" style={{marginTop:16}}>
+        <div className="field"><label htmlFor="attendance-worker-detail">Ver asistencia diaria individual</label><select id="attendance-worker-detail" value={selectedWorkerKey} onChange={e=>setSelectedWorkerKey(e.target.value)}><option value="">Selecciona un trabajador…</option>{grouped.map(g=><option key={g.key} value={g.key}>{g.rut||g.key} · {g.name}</option>)}</select></div>
+      </div>
+      {selectedWorkerKey && <><div className="section-head"><h3>Detalle diario de {grouped.find(g=>g.key===selectedWorkerKey)?.name || selectedWorkerKey}</h3><span className="status">{selectedWorkerRows.length} días / registros</span></div>
+      <div className="table-wrap"><table><thead><tr><th>Fecha</th><th>Turno</th><th>Planificado</th><th>Marcación real</th><th>H. asignadas</th><th>H. trabajadas</th><th>H. extra</th><th>Atraso</th><th>Permiso / estado</th></tr></thead><tbody>{selectedWorkerRows.slice(0,500).map(r=><tr key={r.source_row}><td>{r.work_date}</td><td>{r.shift_name||"—"}</td><td>{r.scheduled_start.slice(0,5)||"—"}–{r.scheduled_end.slice(0,5)||"—"}</td><td>{r.actual_start.slice(0,5)||"—"}–{r.actual_end.slice(0,5)||"—"}</td><td>{fmtMinutes(r.scheduled_minutes)}</td><td>{fmtMinutes(r.worked_minutes)}</td><td>{fmtMinutes(r.overtime_minutes)}</td><td>{fmtMinutes(r.late_minutes)}</td><td>{[r.permission_note,r.attendance_status].filter(Boolean).join(" · ")||"—"}</td></tr>)}</tbody></table></div>
+      {selectedWorkerRows.length>500 && <p className="muted">Se muestran los primeros 500 registros diarios del trabajador; el resto se conserva al guardar.</p>}</>}
       <p className="muted attendance-footnote">Las horas se calculan por registro y luego se totalizan por trabajador para el período seleccionado. Una fila representa un evento/turno reportado por el ERP; no se inventan turnos faltantes. Revisa el mapeo antes de guardar.</p>
     </section>}
 
