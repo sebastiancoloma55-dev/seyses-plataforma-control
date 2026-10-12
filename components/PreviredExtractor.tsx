@@ -78,7 +78,9 @@ function parseCertificate(text:string):MutablePreviredRow[] {
   const results=new Map<string,MutablePreviredRow>();
   const chunks=text.split(/Que,\s*las\s*cotizaciones\s*previsionales\s*del\s*Sr\.?\s*\(a\)/i).slice(1);
   const months="Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre";
-  const contribution=new RegExp("^(.+?)\\s+("+months+")\\s+(\\d{4})\\s+(REM|GRA|RET|LEY|COM)\\s+\\$?\\s*([\\d.]+)\\s+\\$?\\s*([\\d.]+)\\s*$","i");
+  // Previred certificates can have one contribution split over several extracted PDF text lines.
+  // Flatten whitespace inside each employee block and match all contribution entries across it.
+  const contribution=new RegExp("([A-Za-zÁÉÍÓÚÑáéíóúñ][A-Za-zÁÉÍÓÚÑáéíóúñ\\\\s()./-]{2,}?)\\\\s+("+months+")\\\\s+(\\\\d{4})\\\\s+(REM|GRA|RET|LEY|COM)\\\\s+\\\\$?\\\\s*([\\\\d][\\\\d.,]*)\\\\s+\\\\$?\\\\s*([\\\\d][\\\\d.,]*)","gi");
   for(const chunk of chunks) {
     const info=chunk.match(/([\s\S]*?),\s*Rut\s*:\s*([\d.\-kK]+)/i);
     if(!info)continue;
@@ -87,20 +89,41 @@ function parseCertificate(text:string):MutablePreviredRow[] {
     if(!rut)continue;
     const row=results.get(rut)||newRow(rut,name);
     if(name.length>String(row["Nombre PDF"]).length)row["Nombre PDF"]=name;
-    const lines=chunk.split(/\r?\n/).map(line=>line.replace(/\s+/g," ").trim()).filter(Boolean);
-    for(const line of lines) {
-      const match=line.match(contribution);
-      if(!match)continue;
+
+    const flattened=chunk.replace(/\s+/g," ").trim();
+    let matched=0;
+    for(const match of flattened.matchAll(contribution)) {
       const institution=normalize(match[1]);
       const base=parseMoney(match[5]), amount=parseMoney(match[6]);
-      if(institution.includes("SEGURO SOCIAL")){row["Renta Seguro Social"]=base;row["Monto Seguro Social"]=amount;}
-      else if(institution.includes("OBLIGATORIA")){row["AFP"]="AFP "+institution.replace("(COTIZACION OBLIGATORIA","").replace(")","").trim();row["Renta AFP"]=base;row["Cotizacion AFP"]=amount;}
-      else if(institution.includes("(SIS)")||institution.endsWith(" SIS"))row["SIS AFP"]=amount;
-      else if(institution.includes("APVI"))row["APVI"]=amount;
-      else if(institution.includes("(AFC)")||institution.endsWith(" AFC")){row["Renta AFC"]=base;row["AFC Empleador"]=amount;}
-      else if(["FONASA","ISAPRE","MASVIDA","CRUZ BLANCA","CONSALUD","COLMENA","BANMEDICA","NUEVA MASVIDA"].some(name=>institution.includes(name))){row["Salud"]=institution;row["Renta Salud"]=base;row["Cotizacion Salud"]=amount;}
-      else if(["MUTUAL","ACHS","IST","ISL"].some(name=>institution.includes(name))){row["Renta Mutual"]=base;row["Cotizacion Mutual"]=amount;}
-      else if(["CAJA","HEROES","ANDES"].some(name=>institution.includes(name))){row["Cotizacion Caja"]=amount;if(String(row["Salud"]).includes("ISAPRE"))row["Renta Caja Isapre"]=base;else row["Renta Caja No Isapre"]=base;}
+      matched++;
+      if(institution.includes("SEGURO SOCIAL")) {
+        row["Renta Seguro Social"]=base; row["Monto Seguro Social"]=amount;
+      } else if(institution.includes("OBLIGATORIA")) {
+        row["AFP"]="AFP "+institution.replace(/\s*\(COTIZACION OBLIGATORIA\)\s*/,"").trim();
+        row["Renta AFP"]=base; row["Cotizacion AFP"]=amount;
+      } else if(institution.includes("(SIS)")||institution.endsWith(" SIS")) {
+        row["SIS AFP"]=amount;
+      } else if(institution.includes("APVI")) {
+        row["APVI"]=amount;
+      } else if(institution.includes("(AFC)")||institution.endsWith(" AFC")||institution.includes("CESANTIA")) {
+        row["Renta AFC"]=base; row["AFC Empleador"]=amount;
+      } else if(["FONASA","ISAPRE","MASVIDA","CRUZ BLANCA","CONSALUD","COLMENA","BANMEDICA","NUEVA MASVIDA"].some(value=>institution.includes(value))) {
+        row["Salud"]=institution; row["Renta Salud"]=base; row["Cotizacion Salud"]=amount;
+      } else if(["MUTUAL","ACHS","IST","ISL","INSTITUTO DE SEGURIDAD"].some(value=>institution.includes(value))) {
+        row["Renta Mutual"]=base; row["Cotizacion Mutual"]=amount;
+      } else if(["CAJA","HEROES","ANDES"].some(value=>institution.includes(value))) {
+        row["_Renta_Caja_Base"]=base; row["Cotizacion Caja"]=amount;
+      }
+    }
+    // Decide which Caja base column to use after reading every contribution in the block;
+    // the health institution may appear before or after the Caja entry in the PDF text.
+    const cajaBase=Number(row["_Renta_Caja_Base"])||0;
+    if(cajaBase>0) {
+      if(String(row["Salud"]).includes("ISAPRE")) {
+        row["Renta Caja Isapre"]=cajaBase; row["Renta Caja No Isapre"]=0;
+      } else {
+        row["Renta Caja No Isapre"]=cajaBase; row["Renta Caja Isapre"]=0;
+      }
     }
     results.set(rut,row);
   }
@@ -197,8 +220,14 @@ export default function PreviredExtractor() {
       const text=await readPdf(file);
       const extracted=parsePrevired(text);
       if(!extracted.length)throw new Error("No se detectaron trabajadores. Verifica que el PDF sea una planilla o Certificado de Pagos de Previred con texto seleccionable y RUT legibles.");
+      const amountColumns=COLUMNS.slice(4);
+      const workersWithAmounts=extracted.filter(row=>amountColumns.some(column=>Number(row[column])>0));
+      const workersWithInstitutions=extracted.filter(row=>String(row.AFP||"").trim()||String(row.Salud||"").trim());
+      if(!workersWithAmounts.length || !workersWithInstitutions.length) {
+        throw new Error("Se identificaron "+extracted.length+" RUT/nombres, pero no se pudieron confirmar cotizaciones ni instituciones previsionales. Por seguridad no se generó el Excel: la extracción sería incompleta. Este PDF parece usar un formato distinto al que reconoce el analizador; necesitamos ajustar el lector usando el PDF original de Previred.");
+      }
       setRows(extracted);
-      setMessage("Extracción terminada: "+extracted.length.toLocaleString("es-CL")+" trabajador(es). Revisa los valores antes de usar el Excel.");
+      setMessage("Extracción terminada: "+extracted.length.toLocaleString("es-CL")+" trabajador(es); "+workersWithAmounts.length.toLocaleString("es-CL")+" con montos previsionales detectados. Revisa el resultado antes de usar el Excel.");
     } catch(e) {
       setError(e instanceof Error?e.message:"No fue posible procesar el PDF de Previred.");
     } finally {setBusy(false);}
