@@ -9,7 +9,7 @@ class ReconciliationTests(unittest.TestCase):
     def test_normalize_rut_variants(self):
         self.assertEqual(normalize_rut("12.345.678-5"), "12345678-5")
         self.assertEqual(normalize_rut("123456785"), "12345678-5")
-        self.assertEqual(normalize_rut("12345678.0"), "12345678-0")
+        self.assertEqual(normalize_rut("123456785.0"), "12345678-5")
         self.assertEqual(normalize_rut(None), "")
 
     def test_reconcile_detects_missing_access_and_extra_access(self):
