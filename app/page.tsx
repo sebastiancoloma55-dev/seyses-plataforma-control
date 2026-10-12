@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import type { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
 
@@ -149,7 +149,7 @@ export default function Home() {
     return rows.filter(row => Object.values(row).some(value => show(value).toLowerCase().includes(term)));
   }, [rows, search]);
 
-  async function signIn(event: React.FormEvent<HTMLFormElement>) {
+  async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(""); setMessage("");
     try {
       const { error: signInError } = await getSupabase().auth.signInWithPassword({ email: email.trim(), password });
