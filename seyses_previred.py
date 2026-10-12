@@ -19,7 +19,6 @@ def extraer_planilla_previred(reader):
     data = {}
     contexto = "UNKNOWN"
     current_afp = "AFP"
-    ruts_empresa = ['77.419.473-8', '24.598.191-0']
     for page in reader.pages:
         text = page.extract_text()
         if not text: continue
@@ -45,7 +44,6 @@ def extraer_planilla_previred(reader):
             m_rut = re.search(r'\b(\d{1,2}\.\d{3}\.\d{3}\-[0-9Kk])\b', line)
             if not m_rut: continue
             rut = m_rut.group(1).upper()
-            if rut in ruts_empresa: continue
             if rut not in data:
                 data[rut] = {
                     'RUT': rut, 'Nombre PDF': '', 'AFP': '', 'Salud': '', 
