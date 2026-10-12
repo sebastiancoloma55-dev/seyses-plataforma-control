@@ -4,6 +4,7 @@ import plotly.express as px
 import streamlit as st
 
 from sesyes_supabase import sign_in, sign_out, log_event, get_audit_logs
+from sesyes_imports import read_spreadsheet, reconcile_sources, worker_payloads
 
 st.set_page_config(
     page_title="SEYSES | Centro de control",
@@ -141,7 +142,7 @@ with st.sidebar:
     st.caption(f"Perfil autorizado: {role.upper()}")
     section = st.radio(
         "ESPACIOS DE TRABAJO",
-        ["Resumen ejecutivo", "Trabajadores", "Procesos", "Diferencias", "Archivos", "Auditoría", "Administración"],
+        ["Resumen ejecutivo", "Importar y conciliar", "Trabajadores", "Procesos", "Diferencias", "Archivos", "Auditoría", "Administración"],
         label_visibility="visible",
     )
     st.divider()
@@ -160,6 +161,7 @@ with top_left:
     st.markdown("<div class='seyses-eyebrow'>SEYSES / OPERACIONES</div>", unsafe_allow_html=True)
     page_titles = {
         "Resumen ejecutivo": ("Resumen ejecutivo", "Una vista clara de la operación, los procesos y las alertas."),
+        "Importar y conciliar": ("Importación y conciliación", "Carga controlada de nómina y accesos con vista previa antes de guardar resultados."),
         "Trabajadores": ("Maestro de trabajadores", "Consulta y busca los registros disponibles en la base."),
         "Procesos": ("Control de procesos", "Seguimiento de ejecuciones, resultados y errores."),
         "Diferencias": ("Centro de diferencias", "Prioriza hallazgos y da seguimiento a su resolución."),
@@ -171,6 +173,130 @@ with top_left:
     st.markdown(f"<div class='seyses-h1'>{title}</div><div class='seyses-sub'>{subtitle}</div>", unsafe_allow_html=True)
 with top_right:
     st.markdown(f"<div style='text-align:right;color:#77728f;font-size:.8rem;padding-top:1.3rem'>{datetime.now().strftime('%d %b %Y')}<br><b>{datetime.now().strftime('%H:%M')}</b></div>", unsafe_allow_html=True)
+
+
+elif section == "Importar y conciliar":
+    if role not in ("admin", "operator"):
+        st.error("Tu perfil es de solo lectura. Solicita al administrador un perfil operador para cargar y conciliar archivos.")
+    else:
+        st.markdown("<div class='seyses-panel'><div class='seyses-section'>1. Cargar fuentes</div><p style='color:#77728f'>Selecciona los Excel de nómina y control de accesos. La aplicación valida columnas y duplicados antes de guardar.</p></div>", unsafe_allow_html=True)
+        col_payroll, col_access = st.columns(2, gap="medium")
+        with col_payroll:
+            payroll_file = st.file_uploader("Nómina vigente (.xlsx)", type=["xlsx"], key="seyses_payroll_upload")
+        with col_access:
+            access_file = st.file_uploader("Control de accesos (.xlsx)", type=["xlsx"], key="seyses_access_upload")
+        if st.button("Validar archivos y generar vista previa", type="primary", disabled=not (payroll_file and access_file), use_container_width=True):
+            try:
+                payroll_df, payroll_meta = read_spreadsheet(payroll_file)
+                access_df, access_meta = read_spreadsheet(access_file)
+                preview, payroll_info, access_info = reconcile_sources(payroll_df, access_df)
+                st.session_state.seyses_reconciliation = {
+                    "preview": preview,
+                    "payroll_meta": payroll_meta,
+                    "access_meta": access_meta,
+                    "payroll_info": payroll_info,
+                    "access_info": access_info,
+                }
+                st.success("Validación completada. Revisa la vista previa antes de confirmar.")
+            except Exception as exc:
+                st.session_state.seyses_reconciliation = None
+                st.error(str(exc))
+        state = st.session_state.get("seyses_reconciliation")
+        if state:
+            preview = state["preview"]
+            payroll_info, access_info = state["payroll_info"], state["access_info"]
+            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Registros nómina", payroll_info["valid_unique_ruts"])
+            m2.metric("Registros accesos", access_info["valid_unique_ruts"])
+            m3.metric("Personas conciliadas", len(preview))
+            m4.metric("Diferencias detectadas", int((preview["categoria"] != "").sum()))
+            if payroll_info["duplicate_ruts"] or access_info["duplicate_ruts"]:
+                st.warning("Se detectaron RUT duplicados. Se conservará la primera fila por RUT para la vista previa; revisa los archivos fuente antes de confirmar.")
+                with st.expander("Ver RUT duplicados"):
+                    st.write({"Nómina": payroll_info["duplicate_ruts"], "Accesos": access_info["duplicate_ruts"]})
+            if payroll_info["rows_without_rut"] or access_info["rows_without_rut"]:
+                st.warning(f"Filas sin RUT válido descartadas: nómina {payroll_info['rows_without_rut']}, accesos {access_info['rows_without_rut']}.")
+            st.markdown("<div class='seyses-panel'><div class='seyses-section'>2. Vista previa de conciliación</div></div>", unsafe_allow_html=True)
+            status_filter = st.multiselect("Mostrar estados", sorted(preview["estado"].dropna().unique().tolist()), default=sorted(preview["estado"].dropna().unique().tolist()))
+            visible = preview[preview["estado"].isin(status_filter)]
+            st.dataframe(visible, use_container_width=True, hide_index=True)
+            st.download_button("Descargar vista previa CSV", visible.to_csv(index=False).encode("utf-8-sig"), "seyses_vista_previa_conciliacion.csv", "text/csv")
+            st.caption("Los archivos se procesan en memoria para la vista previa. La confirmación guarda los registros y metadatos de proceso; no se suben los archivos originales a Storage.")
+            confirm = st.checkbox("Confirmo que revisé la vista previa y autorizo guardar los resultados en la base independiente de SEYSES.", key="seyses_confirm_reconciliation")
+            if st.button("Confirmar y guardar en SEYSES", type="primary", disabled=not confirm, use_container_width=True):
+                process_id = None
+                try:
+                    run_result = client.table("process_runs").insert({
+                        "created_by": user.get("user_id"),
+                        "process_type": "conciliacion_nomina_accesos",
+                        "status": "started",
+                        "source_filename": f"{state['payroll_meta']['filename']} + {state['access_meta']['filename']}",
+                        "records_read": int(state["payroll_meta"]["rows"] + state["access_meta"]["rows"]),
+                        "metadata": {
+                            "payroll_sha256": state["payroll_meta"]["sha256"],
+                            "access_sha256": state["access_meta"]["sha256"],
+                            "payroll_sheet": state["payroll_meta"]["sheet"],
+                            "access_sheet": state["access_meta"]["sheet"],
+                        },
+                    }).execute()
+                    if not run_result.data:
+                        raise RuntimeError("No se pudo crear el registro de proceso.")
+                    process_id = run_result.data[0]["id"]
+                    workers = worker_payloads(preview, process_id)
+                    if workers:
+                        client.table("workers").upsert(workers, on_conflict="rut").execute()
+                    differences = preview[preview["categoria"] != ""]
+                    diff_payloads = [{
+                        "process_run_id": process_id,
+                        "rut": row["rut"],
+                        "full_name": row["full_name"] or None,
+                        "category": row["categoria"],
+                        "severity": row["severidad"],
+                        "description": row["descripcion"],
+                        "status": "open",
+                    } for _, row in differences.iterrows()]
+                    if diff_payloads:
+                        client.table("discrepancies").insert(diff_payloads).execute()
+                    file_payloads = []
+                    for meta, kind in [(state["payroll_meta"], "nomina"), (state["access_meta"], "accesos")]:
+                        file_payloads.append({
+                            "uploaded_by": user.get("user_id"),
+                            "process_run_id": process_id,
+                            "original_filename": meta["filename"],
+                            "file_kind": kind,
+                            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "file_size_bytes": meta["bytes"],
+                            "checksum_sha256": meta["sha256"],
+                            "status": "processed",
+                            "metadata": {"sheet": meta["sheet"], "rows": meta["rows"]},
+                        })
+                    client.table("processed_files").insert(file_payloads).execute()
+                    client.table("process_runs").update({
+                        "status": "completed",
+                        "records_processed": int(len(preview)),
+                        "differences_found": int(len(diff_payloads)),
+                    }).eq("id", process_id).execute()
+                    log_event(client, user, "reconciliation_completed", "Importación y conciliación", "success", {
+                        "process_id": process_id,
+                        "records_processed": int(len(preview)),
+                        "differences_found": int(len(diff_payloads)),
+                    })
+                    st.success(f"Conciliación guardada. Personas: {len(preview)} · Diferencias: {len(diff_payloads)}.")
+                    st.session_state.seyses_reconciliation = None
+                    st.session_state.seyses_confirm_reconciliation = False
+                    st.rerun()
+                except Exception:
+                    if process_id:
+                        try:
+                            client.table("process_runs").update({
+                                "status": "failed",
+                                "error_summary": "Error durante el guardado; revisar registros y volver a validar antes de reintentar.",
+                            }).eq("id", process_id).execute()
+                        except Exception:
+                            pass
+                    log_event(client, user, "reconciliation_failed", "Importación y conciliación", "failure", {"process_id": process_id})
+                    st.error("No se completó el guardado. El proceso quedó marcado como fallido si alcanzó a registrarse. Revisa los permisos y el historial antes de volver a intentar para evitar duplicar diferencias.")
 
 if section == "Resumen ejecutivo":
     if st.button("↻ Actualizar indicadores"):
