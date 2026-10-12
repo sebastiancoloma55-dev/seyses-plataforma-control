@@ -139,6 +139,8 @@ def reconcile_sources(payroll_df: pd.DataFrame, access_df: pd.DataFrame) -> tupl
             "estado": "Con diferencia" if category else "Coincide",
         })
     result = pd.DataFrame(rows)
+    if result.empty:
+        raise ValueError("No se encontraron RUT válidos en los archivos. Revisa las columnas y los datos antes de continuar.")
     return result, payroll_info, access_info
 
 
