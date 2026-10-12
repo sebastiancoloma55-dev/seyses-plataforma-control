@@ -107,12 +107,28 @@ function parseCertificate(text:string):MutablePreviredRow[] {
         row["APVI"]=amount;
       } else if(institution.includes("(AFC)")||institution.endsWith(" AFC")||institution.includes("CESANTIA")) {
         row["Renta AFC"]=base; row["AFC Empleador"]=amount;
+      } else if(
+        institution.includes("COT. DE NO AFILIADO A ISAPRE") ||
+        institution.includes("CAJA DE COMPENSACION") ||
+        institution.startsWith("LOS HEROES") ||
+        institution.startsWith("LOS ANDES") ||
+        institution.includes("LOS HEROES (") ||
+        institution.includes("LOS ANDES (") ||
+        institution.includes("CAJA LOS ANDES") ||
+        institution.includes("CAJA LOS HEROES") ||
+        institution.includes("CAJA DE COMPENSACION")
+      ) {
+        // Important: "NO AFILIADO A ISAPRE" is the name of the Caja contribution,
+        // not a health provider. Classify it before the health-provider matcher.
+        row["_Renta_Caja_Base"]=base;
+        row["Cotizacion Caja"]=amount;
       } else if(["FONASA","ISAPRE","MASVIDA","CRUZ BLANCA","CONSALUD","COLMENA","BANMEDICA","NUEVA MASVIDA"].some(value=>institution.includes(value))) {
-        row["Salud"]=institution; row["Renta Salud"]=base; row["Cotizacion Salud"]=amount;
+        row["Salud"]=institution;
+        row["Renta Salud"]=base;
+        row["Cotizacion Salud"]=amount;
       } else if(["MUTUAL","ACHS","IST","ISL","INSTITUTO DE SEGURIDAD"].some(value=>institution.includes(value))) {
-        row["Renta Mutual"]=base; row["Cotizacion Mutual"]=amount;
-      } else if(["CAJA","HEROES","ANDES"].some(value=>institution.includes(value))) {
-        row["_Renta_Caja_Base"]=base; row["Cotizacion Caja"]=amount;
+        row["Renta Mutual"]=base;
+        row["Cotizacion Mutual"]=amount;
       }
     }
     // Decide which Caja base column to use after reading every contribution in the block;
@@ -231,10 +247,18 @@ export default function PreviredExtractor() {
       const workersWithAmounts=extracted.filter(row=>amountColumns.some(column=>Number(row[column])>0));
       const workersWithInstitutions=extracted.filter(row=>String(row.AFP||"").trim()||String(row.Salud||"").trim());
       if(!workersWithAmounts.length || !workersWithInstitutions.length) {
-        throw new Error("Se identificaron "+extracted.length+" RUT/nombres, pero no se pudieron confirmar cotizaciones ni instituciones previsionales. Por seguridad no se generó el Excel: la extracción sería incompleta. Este PDF parece usar un formato distinto al que reconoce el analizador; necesitamos ajustar el lector usando el PDF original de Previred.");
+        throw new Error("Se identificaron "+extracted.length+" RUT/nombres, pero no se pudieron confirmar cotizaciones ni instituciones previsionales. Por seguridad no se generó el Excel: la extracción sería incompleta.");
       }
+      // Regression guard: Caja entries such as "LOS HEROES (COT. DE NO AFILIADO A ISAPRE)"
+      // must end up in Caja columns, never in Salud. Otherwise refuse a misleading export.
+      const hasCajaContributions=/LOS\s+HEROES|LOS\s+ANDES|CAJA\s+DE\s+COMPENSACION/i.test(text);
+      const cajaTotal=extracted.reduce((total,row)=>total+(Number(row["Cotizacion Caja"])||0),0);
+      if(hasCajaContributions && cajaTotal<=0) {
+        throw new Error("El PDF contiene líneas de Caja (Los Héroes/Los Andes), pero no pude trasladarlas a las columnas de Caja del Excel. No se generó el archivo para evitar una conciliación incorrecta.");
+      }
+      const missingMainData=extracted.filter(row=>!String(row.AFP||"").trim()||!String(row.Salud||"").trim()||!Number(row["Renta AFP"])||!Number(row["Cotizacion AFP"]));
       setRows(extracted);
-      setMessage("Extracción terminada: "+extracted.length.toLocaleString("es-CL")+" trabajador(es); "+workersWithAmounts.length.toLocaleString("es-CL")+" con montos previsionales detectados. Revisa el resultado antes de usar el Excel.");
+      setMessage("Extracción terminada: "+extracted.length.toLocaleString("es-CL")+" trabajador(es); "+workersWithAmounts.length.toLocaleString("es-CL")+" con montos. "+(missingMainData.length?missingMainData.length+" trabajador(es) requieren revisión de AFP/salud/montos. ":"")+"Revisa la vista previa contra el PDF antes de usar el Excel.");
     } catch(e) {
       setError(e instanceof Error?e.message:"No fue posible procesar el PDF de Previred.");
     } finally {setBusy(false);}
