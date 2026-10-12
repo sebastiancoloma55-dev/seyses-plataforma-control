@@ -7,17 +7,24 @@ Aplicación Streamlit conectada a Supabase para gestión de trabajadores, proces
 - Panel ejecutivo con indicadores consultados desde Supabase.
 - Gráficos interactivos de tendencia de procesos y distribución de diferencias.
 - Vistas de trabajadores, procesos, diferencias, archivos y auditoría.
+- Flujo de importación y conciliación de Excel para nómina y accesos con vista previa, detección de duplicados, diferencias y confirmación explícita.
+- Registro de proceso, hashes SHA-256 de los archivos fuente y metadatos en Supabase; los archivos originales no se almacenan en Storage en esta etapa.
+- Protección contra la repetición automática de la misma pareja de archivos y clave única de RUT para evitar duplicar trabajadores.
 - Filtros de búsqueda, descarga CSV de resultados y actualización manual.
 - Acceso con Supabase Auth y permisos basados en perfiles.
 - Mensajes de error que evitan mostrar detalles internos de la base de datos.
 
 ## Estado real
-Esta es una versión de avance para revisión, no una declaración de producción lista. El dashboard consulta datos reales disponibles y muestra estados vacíos si todavía no existen registros. Los flujos completos de importación/conciliación, carga/descarga de archivos privados, pruebas de autorización por rol, respaldo y despliegue público siguen pendientes.
+Esta es una versión de avance para revisión, no una declaración de producción lista. El dashboard consulta datos reales disponibles y muestra estados vacíos si todavía no existen registros. La conciliación de nómina y accesos está implementada en la rama de trabajo, pero requiere pasar CI y una prueba funcional autenticada antes de usarse con información real. El extractor PDF de Previred del archivo heredado aún no está integrado al nuevo panel. La carga/descarga de archivos privados mediante Supabase Storage, pruebas completas de autorización por rol, respaldos y despliegue público siguen pendientes.
 
 ## Requisitos
 - Python 3.10+
 - Proyecto Supabase activo
 - Usuario en Supabase Authentication con un perfil correspondiente en `public.user_profiles`
+
+## Pruebas automáticas
+
+GitHub Actions compila los módulos Python y ejecuta pruebas unitarias del motor de conciliación en cada actualización de la rama y en solicitudes de integración.
 
 ## Configuración local
 1. Instala las dependencias: `pip install -r requirements.txt`.
@@ -27,6 +34,7 @@ Esta es una versión de avance para revisión, no una declaración de producció
 5. Ejecuta `streamlit run app.py`.
 
 ## Seguridad
+- No ejecutar `app_previred.py` como aplicación principal: es una interfaz heredada con usuarios y datos de demostración en memoria. La entrada de trabajo es `app.py`.
 - Nunca subas `.env` ni `.streamlit/secrets.toml` al repositorio.
 - No incluyas claves service-role en la aplicación.
 - Mantén RLS activado y prueba cada rol antes de cargar datos personales reales.
