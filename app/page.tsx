@@ -131,8 +131,8 @@ export default function Home() {
         if (query.error) {
           const fallback = await supabase.from(table).select(columns).limit(100);
           if (fallback.error) throw fallback.error;
-          setRows((fallback.data ?? []) as Row[]);
-        } else setRows((query.data ?? []) as Row[]);
+          setRows((fallback.data ?? []) as unknown as Row[]);
+        } else setRows((query.data ?? []) as unknown as Row[]);
       } else setRows([]);
     } catch {
       setError("No se pudieron cargar algunos datos. Revisa las tablas y políticas RLS de Supabase; el acceso no se ha omitido.");
