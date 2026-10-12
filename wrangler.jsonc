@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "seyses-plataforma-control",
   "main": ".open-next/worker.js",
-  "compatibility_date": "2026-10-13",
+  "compatibility_date": "2026-10-10",
   "compatibility_flags": [
     "nodejs_compat"
   ],
