@@ -294,33 +294,46 @@ function parseTalanaAttendanceRows(
   pages: Array<{tokens:PositionedPdfToken[];lines:PdfVisualLine[];width:number}>,
   fullText: string,
   file: File
-): {headers:string[];rows:RawRow[];pages:number;erp:string} {
+): {headers:string[];rows:RawRow[];pages:number;erp:string;employeesDetected:number} {
   const yearMatch = fullText.match(/\b(?:19|20)\d{2}\b/);
-  const reportYear = yearMatch ? Number(yearMatch[0]) : new Date().getFullYear();
+  const fallbackYear = yearMatch ? Number(yearMatch[0]) : new Date().getFullYear();
   const columns = [
     "RUT", "Nombre empleado", "Sucursal", "Fecha", "Turno asignado",
     "Inicio turno planificado", "Fin turno planificado", "Entrada", "Salida",
     "H. Trabajadas", "H. Ext.", "Desc.", "Justificación", "Horas Asignadas"
   ];
   const rows:RawRow[] = [];
-  const firstPage = pages.find(item=>item.lines.length>0);
-  const firstLines = firstPage?.lines ?? [];
+  const employeeKeys = new Set<string>();
+  const missingIdentityPages:number[] = [];
   const rutPattern = /\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
-  const employee = extractPdfLabelValue(firstLines,"Empleado") || extractPdfLabelValue(firstLines,"Nombre");
-  const labelledRut = extractPdfLabelValue(firstLines,"Rut").match(rutPattern)?.[0]?.toUpperCase() ?? "";
-  const filenameRut = file.name.match(rutPattern)?.[0]?.toUpperCase() ?? "";
-  const rut = labelledRut || filenameRut;
-  const branch = extractPdfLabelValue(firstLines,"Sucursal");
-
-  // Talana places the day/month in the first cell and splits some headings
-  // across lines (e.g. "Horas" / "Asignadas"). Use the report's table bands,
-  // scaled proportionally to page width, instead of treating header text starts
-  // as cell boundaries.
   const baseBoundaries = [60,151,214,246,276,311,345,390,456,520,560];
-  for (const page of pages) {
+
+  // Every page in a Talana "Reporte individual de asistencia" has its own
+  // employee header. Never reuse the first page's RUT/name for the rest.
+  for (let pageIndex=0; pageIndex<pages.length; pageIndex++) {
+    const page = pages[pageIndex];
+    const lines = page.lines;
+    const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+    const normalizedPageText = pageText.replace(/\s+/g," ");
+    const pageYearMatch = pageText.match(/\b(?:19|20)\d{2}\b/);
+    const reportYear = pageYearMatch ? Number(pageYearMatch[0]) : fallbackYear;
+
+    const employee = extractPdfLabelValue(lines,"Empleado") || extractPdfLabelValue(lines,"Nombre");
+    const employeeLine = lines
+      .map(line=>line.items.map(item=>item.str).join(" ").replace(/\s+/g," ").trim())
+      .find(line=>/\bEmpleado\b/i.test(line));
+    const labelledRut = extractPdfLabelValue(lines,"Rut").match(rutPattern)?.[0]?.toUpperCase() ?? "";
+    const employeeLineRut = employeeLine?.match(rutPattern)?.[0]?.toUpperCase() ?? "";
+    const pageFirstRut = normalizedPageText.match(rutPattern)?.[0]?.toUpperCase() ?? "";
+    const singlePersonFilenameRut = pages.length===1 ? (file.name.match(rutPattern)?.[0]?.toUpperCase() ?? "") : "";
+    const rut = employeeLineRut || labelledRut || pageFirstRut || singlePersonFilenameRut;
+    const branch = extractPdfLabelValue(lines,"Sucursal");
+
     const scale = page.width / 595;
     const boundaries = baseBoundaries.map(value=>value*scale);
-    for (const line of page.lines) {
+    let rowsOnThisPage = 0;
+
+    for (const line of lines) {
       const cells = Array.from({length:12},()=>[] as string[]);
       for (const item of line.items) {
         let cellIndex=0;
@@ -358,15 +371,33 @@ function parseTalanaAttendanceRows(
         "Justificación":reason,
         "Horas Asignadas":assigned
       });
+      rowsOnThisPage++;
+    }
+
+    if (rowsOnThisPage>0) {
+      if (!rut || !employee) {
+        missingIdentityPages.push(pageIndex+1);
+      } else {
+        employeeKeys.add(rut.replace(/[.\s]/g,"").toUpperCase());
+      }
     }
   }
+
   if (!rows.length) {
     throw new Error("Reconocí que es un Reporte individual de asistencia de Talana, pero no pude separar sus filas. El PDF debe contener texto digital; revisa que no esté escaneado ni protegido.");
   }
-  return {headers:columns,rows,pages:pages.length,erp:"Talana"};
+  if (missingIdentityPages.length) {
+    throw new Error("Se detectaron jornadas, pero faltan el RUT o el nombre del trabajador en " + missingIdentityPages.length + " página(s). No se importó nada para evitar mezclar a varias personas. Revisa el PDF de origen.");
+  }
+  // If a multi-page bulk report collapses to a single identity, stop before
+  // import instead of letting aggregateAttendance merge everyone together.
+  if (pages.length>1 && employeeKeys.size<2) {
+    throw new Error("El PDF contiene varias páginas, pero el lector solo detectó un trabajador distinto. Se bloqueó la importación para no fusionar a todas las personas como si fueran una. Revisa el archivo o informa este caso a soporte.");
+  }
+  return {headers:columns,rows,pages:pages.length,erp:"Talana",employeesDetected:employeeKeys.size};
 }
 
-async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows: RawRow[]; pages: number; erp?:string }> {
+async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows: RawRow[]; pages: number; erp?:string; employeesDetected?:number }> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
   const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
@@ -547,8 +578,13 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     const selected = event.target.files?.[0] ?? null;
     setError(""); setNotice(""); setFile(selected); setHeaders([]); setRawRows([]); setMapping({});
     if (!selected) return;
-    if (selected.size > 15*1024*1024) { setError("El archivo supera 15 MB. El máximo permitido es 15 MB."); return; }
     const isPdf = /\.pdf$/i.test(selected.name);
+    const maxBytes = isPdf ? 35*1024*1024 : 15*1024*1024;
+    if (selected.size > maxBytes) {
+      setError(isPdf ? "El PDF supera 35 MB. Divide el reporte en archivos más pequeños." : "El archivo supera 15 MB. El máximo permitido para Excel/CSV es 15 MB.");
+      setFile(null);
+      return;
+    }
     if (!isPdf && !/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible. Usa Excel (.xlsx/.xls), CSV (.csv) o un PDF digital de asistencia con tabla y encabezados reconocibles."); return; }
     if (isPdf) {
       try {
@@ -569,7 +605,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
           const dates = objects.map(row => parseDate(row[next.work_date!])).filter(Boolean).sort();
           if (dates.length) { setPeriodStart(dates[0]); setPeriodEnd(dates[dates.length - 1]); }
         }
-        setNotice("PDF de asistencia leído en el navegador: " + objects.length.toLocaleString("es-CL") + " jornadas detectadas en " + parsedPdf.pages + " página(s). Revisa el mapeo y las cifras antes de importar; los PDF sin texto seleccionable o con tablas no estándar necesitan un adaptador específico.");
+        setNotice("PDF de asistencia leído en el navegador: " + objects.length.toLocaleString("es-CL") + " jornadas en " + parsedPdf.pages + " página(s)" + (parsedPdf.employeesDetected !== undefined ? " · " + parsedPdf.employeesDetected.toLocaleString("es-CL") + " trabajadores distintos" : "") + ". Revisa los RUT/nombres detectados antes de importar.");
       } catch (e) {
         setError(e instanceof Error ? e.message : "No se pudo leer el PDF de Talana.");
       }
