@@ -6,15 +6,20 @@ import { getSupabase } from "@/lib/supabase";
 
 type RawRow = Record<string, unknown>;
 type FieldKey =
-  | "worker_rut" | "worker_id" | "worker_name" | "branch" | "work_date"
-  | "shift_name" | "scheduled_start" | "scheduled_end" | "actual_start"
-  | "actual_end" | "worked_duration" | "overtime_duration" | "break_duration" | "attendance_status";
+  | "worker_rut" | "worker_id" | "worker_name" | "branch" | "job_title" | "supervisor" | "contract_hours_weekly" | "on_payroll" | "permission_note" | "work_date"
+  | "shift_name" | "scheduled_duration" | "scheduled_start" | "scheduled_end" | "actual_start"
+  | "actual_end" | "worked_duration" | "overtime_duration" | "overtime_duration_secondary" | "break_duration" | "attendance_status";
 type AttendanceRow = {
   source_row: number;
   worker_key: string;
   worker_rut: string;
   worker_name: string;
   branch: string;
+  job_title: string;
+  supervisor: string;
+  contract_hours_weekly: number;
+  on_payroll: string;
+  permission_note: string;
   work_date: string;
   shift_name: string;
   scheduled_start: string;
@@ -46,14 +51,21 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; aliases: strin
   { key: "worker_id", label: "ID / código trabajador", aliases: ["employee id","id empleado","codigo empleado","código empleado","legajo","matricula","matrícula","numero empleado","numero trabajador","worker id"] },
   { key: "worker_name", label: "Nombre trabajador", aliases: ["nombre","trabajador","nombre completo","full name","employee name","colaborador","empleado","worker name","nombre empleado"] },
   { key: "branch", label: "Sucursal / sede", aliases: ["sucursal","local","tienda","branch","site","location","centro costo","centro de costo","departamento","department"] },
+  { key: "job_title", label: "Cargo", aliases: ["cargo","puesto","job title","position","rol laboral"] },
+  { key: "supervisor", label: "Jefe / supervisor", aliases: ["jefe","supervisor","manager","responsable directo"] },
+  { key: "contract_hours_weekly", label: "Horas contrato semanal", aliases: ["horas contrato nomina","horas contrato nomina","horas contrato semanal","weekly contract hours","contract hours"] },
+  { key: "on_payroll", label: "En nómina", aliases: ["en nomina","en nómina","in payroll","payroll status"] },
+  { key: "permission_note", label: "Permiso / justificación", aliases: ["permiso","justificacion","justificación","leave note","permission"] },
   { key: "work_date", label: "Fecha del registro", required: true, aliases: ["fecha","fecha asistencia","date","dia","día","fecha turno","fecha marcacion","fecha marcación","work date"] },
   { key: "shift_name", label: "Turno asignado", aliases: ["turno","shift","turno asignado","jornada","codigo turno","código turno","shift name","assigned shift"] },
+  { key: "scheduled_duration", label: "Horas asignadas (total diario)", aliases: ["horas asign","horas asignadas","assigned hours","planned hours","scheduled hours","planned duration"] },
   { key: "scheduled_start", label: "Inicio turno planificado", aliases: ["entrada planificada","hora inicio turno","inicio turno","scheduled start","shift start","entrada programada","hora entrada programada","inicio programado"] },
   { key: "scheduled_end", label: "Fin turno planificado", aliases: ["salida programada","hora salida turno","fin turno","scheduled end","shift end","fin programado"] },
   { key: "actual_start", label: "Primera entrada real", aliases: ["entrada","marcacion entrada","marcación entrada","check in","punch in","hora ingreso","hora entrada real","first in","actual start","entrada real"] },
   { key: "actual_end", label: "Última salida real", aliases: ["salida","marcacion salida","marcación salida","check out","punch out","hora salida","ultima salida","última salida","last out","actual end","salida real"] },
-  { key: "worked_duration", label: "Horas trabajadas (si vienen totalizadas)", aliases: ["horas trabajadas","horas totales","total horas","worked hours","horas ordinarias","duration","total hrs","horas efectivas","worked duration","total trabajado"] },
-  { key: "overtime_duration", label: "Horas extra", aliases: ["horas extra","hora extra","overtime","overtime hours","hhee","he 50","he 100","extra hours"] },
+  { key: "worked_duration", label: "Horas trabajadas (si vienen totalizadas)", aliases: ["horas trabajadas","horas asis","horas asistencia","horas asistidas","horas totales","total horas","worked hours","horas ordinarias","duration","total hrs","horas efectivas","worked duration","total trabajado"] },
+  { key: "overtime_duration", label: "Horas extra (primera columna)", aliases: ["horas extra","hora extra","overtime","overtime hours","hhee","he 50","he 100","extra hours"] },
+  { key: "overtime_duration_secondary", label: "Horas extra (segunda columna, opcional)", aliases: ["horas extra 50","horas extra 30","overtime 2","second overtime","he 50 segundo"] },
   { key: "break_duration", label: "Colación / descanso", aliases: ["colacion","colación","descanso","break","break minutes","minutos colacion","duracion descanso","duración descanso"] },
   { key: "attendance_status", label: "Estado / incidencia", aliases: ["estado","asistencia","status","incidencia","ausentismo","novedad","observacion","observación"] }
 ];
@@ -198,19 +210,46 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     const selected = event.target.files?.[0] ?? null;
     setError(""); setNotice(""); setFile(selected); setHeaders([]); setRawRows([]); setMapping({});
     if (!selected) return;
-    if (selected.size > 15*1024*1024) { setError("El archivo supera 15 MB. Divide el reporte por período o sucursal y vuelve a cargarlo."); return; }
-    if (!/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible todavía. Usa Excel (.xlsx/.xls) o CSV (.csv); PDF y conectores ERP nativos se incorporarán como adaptadores separados."); return; }
+    if (selected.size > 15*1024*1024) { setError("El archivo supera 15 MB. El máximo permitido es 15 MB."); return; }
+    if (!/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible todavía. Usa Excel (.xlsx/.xls) o CSV (.csv); PDF y conectores ERP nativos requieren adaptadores separados."); return; }
     try {
       const bytes = await selected.arrayBuffer();
       const book = XLSX.read(bytes,{type:"array",cellDates:true});
-      const first = book.SheetNames[0];
-      if (!first) throw new Error("El archivo no contiene hojas.");
-      const sheet = book.Sheets[first];
-      const objects = XLSX.utils.sheet_to_json<RawRow>(sheet,{defval:"",raw:false,blankrows:false});
-      if (!objects.length) throw new Error("La hoja no contiene filas de datos.");
-      if (objects.length > 10000) throw new Error("El reporte supera 10000 filas. Divídelo y procesa los segmentos por período.");
-      const cols = Object.keys(objects[0]).map(String);
-      if (!cols.length) throw new Error("No se detectaron encabezados. Revisa que la primera fila contenga los nombres de las columnas.");
+      if (!book.SheetNames.length) throw new Error("El archivo no contiene hojas.");
+      let cols: string[] = [];
+      let objects: RawRow[] = [];
+      let detailSheets: string[] = [];
+      if (/\.csv$/i.test(selected.name)) {
+        const parsed = XLSX.utils.sheet_to_json<RawRow>(book.Sheets[book.SheetNames[0]],{defval:"",raw:false,blankrows:false});
+        if (!parsed.length) throw new Error("El CSV no contiene filas de datos.");
+        cols = Object.keys(parsed[0]).map(String); objects = parsed;
+        detailSheets = [book.SheetNames[0]];
+      } else {
+        const candidateSheets = book.SheetNames.map(sheetName => {
+          const parsed = XLSX.utils.sheet_to_json<RawRow>(book.Sheets[sheetName],{defval:"",raw:false,blankrows:false});
+          const candidateCols = parsed.length ? Object.keys(parsed[0]).map(String) : [];
+          const dateColumn = findHeader(candidateCols,FIELDS.find(f=>f.key==="work_date")!.aliases);
+          const personColumn = findHeader(candidateCols,[...FIELDS.find(f=>f.key==="worker_name")!.aliases,...FIELDS.find(f=>f.key==="worker_rut")!.aliases,...FIELDS.find(f=>f.key==="worker_id")!.aliases]);
+          const hoursColumn = findHeader(candidateCols,[...FIELDS.find(f=>f.key==="worked_duration")!.aliases,...FIELDS.find(f=>f.key==="actual_start")!.aliases]);
+          return {sheetName,parsed,candidateCols,valid: Boolean(dateColumn && personColumn && hoursColumn)};
+        }).filter(s=>s.valid);
+        if (candidateSheets.length) {
+          const reference = candidateSheets[0].candidateCols;
+          const referenceSignature = reference.map(norm).sort().join("|");
+          const compatible = candidateSheets.filter(s=>s.candidateCols.map(norm).sort().join("|")===referenceSignature);
+          detailSheets = compatible.map(s=>s.sheetName);
+          cols = reference;
+          objects = compatible.flatMap(s=>s.parsed);
+        } else {
+          const first = book.SheetNames[0];
+          objects = XLSX.utils.sheet_to_json<RawRow>(book.Sheets[first],{defval:"",raw:false,blankrows:false});
+          if (!objects.length) throw new Error("No se encontró una hoja con filas de datos.");
+          cols = Object.keys(objects[0]).map(String);
+          detailSheets = [first];
+        }
+      }
+      if (!objects.length || !cols.length) throw new Error("No se detectaron encabezados y filas de asistencia.");
+      if (objects.length > 150000) throw new Error("El reporte supera 150.000 filas. Divide el archivo por año o períodos más pequeños.");
       setHeaders(cols); setRawRows(objects);
       const next: Partial<Record<FieldKey,string>> = {};
       for (const field of FIELDS) {
@@ -218,7 +257,14 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         if (found) next[field.key] = found;
       }
       setMapping(next);
-      setNotice(`Archivo leído: ${objects.length.toLocaleString("es-CL")} filas · Hoja «${first}». Revisa las columnas detectadas antes de guardar.`);
+      if (next.work_date) {
+        const dates = objects.map(row=>parseDate(row[next.work_date!])).filter(Boolean).sort();
+        if (dates.length) {
+          setPeriodStart(dates[0]);
+          setPeriodEnd(dates[dates.length-1]);
+        }
+      }
+      setNotice(`Archivo leído: ${objects.length.toLocaleString("es-CL")} filas · ${detailSheets.length} hoja(s) de detalle: ${detailSheets.slice(0,4).join(", ")}${detailSheets.length>4?"…":""}. Se ignoraron hojas de resumen que no tienen registros diarios compatibles. Revisa el mapeo antes de guardar.`);
     } catch(e) {
       setError(e instanceof Error ? e.message : "No se pudo leer el archivo.");
     }
