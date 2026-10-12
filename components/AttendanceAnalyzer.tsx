@@ -233,9 +233,9 @@ function findUniversalPdfHeader(lines: PdfVisualLine[]): { bottomY: number; anch
       }
     }
     const unique = new Set(matches.map(match => match.key));
-    const hasIdentity = unique.has("worker_name") || unique.has("worker_rut") || unique.has("worker_id");
+    // Individual attendance PDFs often show the worker identity above the table, not as a column.
     const hasTime = unique.has("worked_duration") || unique.has("scheduled_duration") || unique.has("actual_start") || unique.has("actual_end");
-    if (!unique.has("work_date") || !hasIdentity || !hasTime) continue;
+    if (!unique.has("work_date") || !hasTime || unique.size < 4) continue;
     const score = unique.size + (unique.has("shift_name") ? 2 : 0) + (unique.has("worked_duration") ? 2 : 0);
     if (!best || score > best.score) best = {centerY:center.y,score,matches};
   }
@@ -303,7 +303,9 @@ async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows
 
       const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
       const normalizedPageText = pageText.replace(/\s+/g," ");
-      const rut = normalizedPageText.match(rutPattern)?.[0]?.toUpperCase() ?? "";
+      const labelledRut = extractPdfLabelValue(lines,"RUT").match(rutPattern)?.[0]?.toUpperCase() ?? "";
+      const filenameRut = file.name.match(rutPattern)?.[0]?.toUpperCase() ?? "";
+      const rut = labelledRut || filenameRut || normalizedPageText.match(rutPattern)?.[0]?.toUpperCase() || "";
       const employee = extractPdfLabelValue(lines,"Empleado") || extractPdfLabelValue(lines,"Nombre");
       const branch = extractPdfLabelValue(lines,"Sucursal");
       const ordered = [...header.anchors].sort((a,b)=>a.x-b.x);
