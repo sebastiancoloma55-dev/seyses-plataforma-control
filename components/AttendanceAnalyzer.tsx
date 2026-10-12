@@ -660,7 +660,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         <div className="field"><label htmlFor="attendance-start">Período desde</label><input id="attendance-start" type="date" value={periodStart} onChange={e=>setPeriodStart(e.target.value)} required /></div>
         <div className="field"><label htmlFor="attendance-end">Período hasta</label><input id="attendance-end" type="date" value={periodEnd} onChange={e=>setPeriodEnd(e.target.value)} required /></div>
       </div>
-      {file && <div className="notice">{file.name} · {(file.size/1024).toFixed(1)} KB · ${rawRows.length.toLocaleString("es-CL")} filas leídas · Dentro del período: ${mapped.length.toLocaleString("es-CL")} · Excluidas/sin identificación/fecha válida: ${invalidRows.toLocaleString("es-CL")}</div>}
+      {file && <div className="notice">{file.name} · {(file.size/1024).toFixed(1)} KB · {rawRows.length.toLocaleString("es-CL")} filas leídas · Dentro del período: {mapped.length.toLocaleString("es-CL")} · Excluidas/sin identificación/fecha válida: {invalidRows.toLocaleString("es-CL")}</div>}
       {error && <div className="notice error" role="alert">{error}</div>}
       {notice && <div className="notice success" role="status">{notice}</div>}
     </section>
