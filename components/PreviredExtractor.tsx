@@ -358,11 +358,19 @@ export default function PreviredExtractor() {
           const pageText=linesFromItems(items).map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
           page.cleanup();
           if(pageText.trim())textPages++;
-          if(!mode&&pageText.trim()) {
-            mode=/Certificado\s+de\s+Pagos|cotizaciones\s*previsionales\s*del\s*Sr/i.test(pageText)?"certificate":"planilla";
-            setFileMode(mode);
+          // Detectar el formato por página: algunos PDF incluyen una portada/resumen antes de los certificados.
+          const certificateMarker=/Certificado\\s+de\\s+Pagos|cotizaciones\\s*previsionales\\s*del\\s*Sr/i.test(pageText);
+          const hasContributionRows=contributionLines(pageText).matched.length>0;
+          const pageMode:"certificate"|"planilla" =
+            certificateMarker || hasContributionRows ? "certificate" : "planilla";
+          if(pageMode==="certificate") {
+            mode="certificate";
+            setFileMode("certificate");
+          } else if(!mode) {
+            mode="planilla";
+            setFileMode("planilla");
           }
-          if(mode==="certificate") {
+          if(pageMode==="certificate") {
             const result=addCertificatePage(pageText,pageNumber,aggregates,fallbackIdentity);
             if(result.identity)fallbackIdentity=result.identity;
             if(result.matchedLines>0&&result.recognizedContributionPage) {
@@ -372,7 +380,7 @@ export default function PreviredExtractor() {
             } else if(pageText.trim()) {
               unrecognized.push(pageNumber);
             }
-          } else if(mode==="planilla") {
+          } else if(pageMode==="planilla") {
             const parsed=parsePlanilla(pageText) as MutablePreviredRow[];
             const periodMatch=pageText.match(new RegExp("("+MONTHS+")\\s+(\\d{4})","i"));
             const paymentMatch=pageText.match(/\b(REM|GRA|RET|LEY|COM)\b/i);
