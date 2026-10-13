@@ -112,20 +112,30 @@ function monthLabel(month:string,year:string) {
   return (months[normalize(month).replace(/\./g,"")]||month)+" "+year;
 }
 function periodFromText(text:string):string {
+  const normalizedText=normalize(text);
+  const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const toPeriod=(month:string,year:string)=>monthNames[Number(month)-1]+" "+year;
+
+  // Prioridad absoluta al campo que Previred etiqueta como período. Si primero se
+  // busca cualquier MM/AAAA, una fecha legal como 04/10/2001 o el pago 12/08/2026
+  // se interpreta erróneamente como período de cotización.
+  const periodIndex=normalizedText.indexOf("PERIODO");
+  if(periodIndex>=0) {
+    const periodSection=normalizedText.slice(periodIndex,periodIndex+220);
+    const labeledNumeric=periodSection.match(/\b(0?[1-9]|1[0-2])\s*(?:[\/.-]\s*|\s+)(20\d{2})\b/);
+    if(labeledNumeric)return toPeriod(labeledNumeric[1],labeledNumeric[2]);
+    const labeledNamed=periodSection.match(new RegExp("\\b("+MONTHS+")\\s+(20\\d{2})\\b","i"));
+    if(labeledNamed)return monthLabel(labeledNamed[1],labeledNamed[2]);
+  }
+
+  // Compatibilidad con certificados que muestran el mes en texto, sin depender
+  // de una fecha de pago o de la fecha de la autorización legal.
   const named=text.match(new RegExp("\\b("+MONTHS+")\\s+(20\\d{2})\\b","i"));
   if(named)return monthLabel(named[1],named[2]);
-  const slash=text.match(/\b(0?[1-9]|1[0-2])\s*[\/.-]\s*(20\d{2})\b/);
-  if(slash) {
-    const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-    return monthNames[Number(slash[1])-1]+" "+slash[2];
-  }
-  const normalizedText=normalize(text);
-  const labeled=normalizedText.match(/PERIODO(?:\s+DE)?\s+(?:REMUNERACION(?:ES)?|COTIZACIONES)\s*:?\s*(0?[1-9]|1[0-2])\s+(20\d{2})/i)
-    || normalizedText.match(/PERIODO\s+DE\s+(?:REMUNERACION(?:ES)?|COTIZACIONES)\s+(0?[1-9]|1[0-2])\s+(20\d{2})/i);
-  if(labeled) {
-    const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-    return monthNames[Number(labeled[1])-1]+" "+labeled[2];
-  }
+
+  // No permitir que el segundo componente de una fecha DD/MM/AAAA se lea como MM/AAAA.
+  const slash=normalizedText.match(/(?<![\d/])(0?[1-9]|1[0-2])\s*[\/.-]\s*(20\d{2})\b/);
+  if(slash)return toPeriod(slash[1],slash[2]);
   return "Período no identificado";
 }
 function paymentTypeFromText(text:string):string {
@@ -523,7 +533,8 @@ export default function PreviredExtractor() {
           const excelTotal=mappedAmountTotal(item.row);
           const diff=excelTotal-item.sourceTotal;
           const unknown=item.unclassified.join(" | ");
-          const status=unknown?"NO CONCILIADO: institución sin clasificar":Math.abs(diff)>0?"NO CONCILIADO: diferencia de montos":"OK";
+          const validPeriod=/^(Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre) 20\d{2}$/.test(String(item.row["Período cotización"]||""));
+          const status=unknown?"NO CONCILIADO: institución o columnas con conflicto":!validPeriod?"NO CONCILIADO: período no identificado":item.sourceLines>0&&item.classifiedLines<item.sourceLines?"NO CONCILIADO: hay líneas sin clasificar":Math.abs(diff)>0?"NO CONCILIADO: diferencia de montos":"OK";
           return {
             "RUT":String(item.row.RUT||""),"Nombre":String(item.row["Nombre PDF"]||""),
             "Período":String(item.row["Período cotización"]||""),"Tipo pago":String(item.row["Tipo Pago"]||""),
