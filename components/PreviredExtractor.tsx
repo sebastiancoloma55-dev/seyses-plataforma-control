@@ -359,7 +359,7 @@ export default function PreviredExtractor() {
           page.cleanup();
           if(pageText.trim())textPages++;
           // Detectar el formato por página: algunos PDF incluyen una portada/resumen antes de los certificados.
-          const certificateMarker=/Certificado\\s+de\\s+Pagos|cotizaciones\\s*previsionales\\s*del\\s*Sr/i.test(pageText);
+          const certificateMarker=/Certificado\s+de\s+Pagos|cotizaciones\s*previsionales\s*del\s*Sr/i.test(pageText);
           const hasContributionRows=contributionLines(pageText).matched.length>0;
           const pageMode:"certificate"|"planilla" =
             certificateMarker || hasContributionRows ? "certificate" : "planilla";
