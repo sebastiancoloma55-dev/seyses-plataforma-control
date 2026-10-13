@@ -187,15 +187,16 @@ function createAggregate(rut:string,name:string,period:string,paymentType:string
 }
 function addCertificatePage(
   pageText:string,pageNumber:number,aggregates:Map<string,Aggregate>,fallbackIdentity:{rut:string;name:string}|null
-):{identity:{rut:string;name:string}|null;matchedLines:number;hasHeader:boolean;recognizedContributionPage:boolean;unclassified:string[]} {
+):{identity:{rut:string;name:string}|null;matchedLines:number;hasHeader:boolean;recognizedContributionPage:boolean;unclassified:string[];duplicatesSkipped:number} {
   const header=extractRutAndName(pageText);
   const hasHeader=/Que,\s*las\s*cotizaciones\s*previsionales/i.test(pageText);
   const identity=header || (!hasHeader ? fallbackIdentity : null);
   const contributions=contributionLines(pageText);
   const unknown:string[]=[];
   if(!identity||!contributions.length) {
-    return {identity:header||fallbackIdentity,matchedLines:contributions.length,hasHeader,recognizedContributionPage:false,unclassified:unknown};
+    return {identity:header||fallbackIdentity,matchedLines:contributions.length,hasHeader,recognizedContributionPage:false,unclassified:unknown,duplicatesSkipped:0};
   }
+  let duplicatesSkipped=0;
   for(const entry of contributions) {
     const item=entry.data;
     const key=[identity.rut,item.period,item.paymentType].join("|");
@@ -204,7 +205,7 @@ function addCertificatePage(
     if(!aggregate.row["Nombre PDF"] && identity.name)aggregate.row["Nombre PDF"]=identity.name;
     const classified=classifyInstitution(item.institution);
     const eventKey=[identity.rut,item.period,item.paymentType,normalize(item.institution),item.base,item.amount,item.folio].join("|");
-    if(aggregate.eventKeys.has(eventKey))continue;
+    if(aggregate.eventKeys.has(eventKey)){duplicatesSkipped++;continue;}
     aggregate.eventKeys.add(eventKey);
     aggregate.sourceTotal+=item.amount;
     aggregate.sourceLines++;
@@ -222,7 +223,7 @@ function addCertificatePage(
     if(classified.health) row["Salud"]=classified.health;
     aggregates.set(key,aggregate);
   }
-  return {identity:header||fallbackIdentity,matchedLines:contributions.length,hasHeader,recognizedContributionPage:true,unclassified:unknown};
+  return {identity:header||fallbackIdentity,matchedLines:contributions.length,hasHeader,recognizedContributionPage:true,unclassified:unknown,duplicatesSkipped};
 }
 function mergePlanillaRows(
   parsed:MutablePreviredRow[],pageNumber:number,period:string,aggregates:Map<string,Aggregate>
@@ -342,14 +343,12 @@ export default function PreviredExtractor() {
             setFileMode(mode);
           }
           if(mode==="certificate") {
-            const before=Array.from(aggregates.values()).reduce((sum,item)=>sum+(item.pages.has(pageNumber)?1:0),0);
             const result=addCertificatePage(pageText,pageNumber,aggregates,fallbackIdentity);
             if(result.identity)fallbackIdentity=result.identity;
             if(result.matchedLines>0&&result.recognizedContributionPage) {
               pagesWithRows++;
               allUnclassified.push(...result.unclassified);
-              const eventCounts=Array.from(aggregates.values()).filter(item=>item.pages.has(pageNumber)).reduce((sum,item)=>sum+item.sourceLines,0);
-              if(eventCounts===0&&before>0)duplicatesSkipped++;
+              duplicatesSkipped+=result.duplicatesSkipped;
             } else if(pageText.trim()) {
               unrecognized.push(pageNumber);
             }
