@@ -601,10 +601,9 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
           if (found) next[field.key] = found;
         }
         setMapping(next);
-        if (next.work_date) {
-          const dates = objects.map(row => parseDate(row[next.work_date!])).filter(Boolean).sort();
-          if (dates.length) { setPeriodStart(dates[0]); setPeriodEnd(dates[dates.length - 1]); }
-        }
+        // Preserve the period the user selected. The report's actual date range is
+        // shown below and compared against the selected range so a September file
+        // cannot silently replace an intended August import.
         setNotice("PDF de asistencia leído en el navegador: " + objects.length.toLocaleString("es-CL") + " jornadas en " + parsedPdf.pages + " página(s)" + (parsedPdf.employeesDetected !== undefined ? " · " + parsedPdf.employeesDetected.toLocaleString("es-CL") + " trabajadores distintos" : "") + ". Revisa los RUT/nombres detectados antes de importar.");
       } catch (e) {
         setError(e instanceof Error ? e.message : "No se pudo leer el PDF de Talana.");
@@ -671,6 +670,29 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
   function choose(field: FieldKey, value: string) {
     setMapping(prev => ({...prev,[field]:value || undefined}));
   }
+
+  const sourceDateBounds = useMemo(() => {
+    if (!mapping.work_date) return null;
+    const dates = rawRows
+      .map(row => parseDate(row[mapping.work_date!]))
+      .filter((date): date is string => Boolean(date))
+      .sort();
+    return dates.length ? { start: dates[0], end: dates[dates.length - 1], count: dates.length } : null;
+  }, [rawRows, mapping.work_date]);
+
+  const formatDateLabel = (value: string) => {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? match[3]+"/"+match[2]+"/"+match[1] : value;
+  };
+  const hasValidSelectedPeriod = Boolean(periodStart && periodEnd && periodEnd >= periodStart);
+  const sourceHasNoOverlap = Boolean(
+    sourceDateBounds && hasValidSelectedPeriod &&
+    (sourceDateBounds.end < periodStart || sourceDateBounds.start > periodEnd)
+  );
+  const sourceExtendsOutsidePeriod = Boolean(
+    sourceDateBounds && hasValidSelectedPeriod && !sourceHasNoOverlap &&
+    (sourceDateBounds.start < periodStart || sourceDateBounds.end > periodEnd)
+  );
 
   const mapped = useMemo(() => rawRows.flatMap((row,index) => {
     const value = (field: FieldKey) => mapping[field] ? row[mapping[field]!] : "";
@@ -810,6 +832,22 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         <div className="field"><label htmlFor="attendance-end">Período hasta</label><input id="attendance-end" type="date" value={periodEnd} onChange={e=>setPeriodEnd(e.target.value)} required /></div>
       </div>
       {file && <div className="notice">{file.name} · {(file.size/1024).toFixed(1)} KB · {rawRows.length.toLocaleString("es-CL")} filas leídas · Dentro del período: {mapped.length.toLocaleString("es-CL")} · Excluidas/sin identificación/fecha válida: {invalidRows.toLocaleString("es-CL")}</div>}
+      {sourceDateBounds && <div className="notice" role="status">
+        Período detectado en los datos: <strong>{formatDateLabel(sourceDateBounds.start)} al {formatDateLabel(sourceDateBounds.end)}</strong>.
+        {" "}Período seleccionado: <strong>{formatDateLabel(periodStart)} al {formatDateLabel(periodEnd)}</strong>.
+      </div>}
+      {sourceHasNoOverlap && sourceDateBounds && <div className="notice error" role="alert">
+        <strong>⚠ El período del archivo no coincide con el seleccionado.</strong>{" "}
+        El archivo contiene registros desde {formatDateLabel(sourceDateBounds.start)} hasta {formatDateLabel(sourceDateBounds.end)}, pero seleccionaste {formatDateLabel(periodStart)} a {formatDateLabel(periodEnd)}. No hay jornadas dentro de ese período; no se permitirá importar este archivo como si correspondiera al mes seleccionado.
+        <div className="actions" style={{marginTop:10}}>
+          <button type="button" className="btn" onClick={()=>{setPeriodStart(sourceDateBounds.start);setPeriodEnd(sourceDateBounds.end);setError("");setNotice("Período ajustado al detectado en el archivo: "+formatDateLabel(sourceDateBounds.start)+" al "+formatDateLabel(sourceDateBounds.end)+".");}}>
+            Usar período detectado ({formatDateLabel(sourceDateBounds.start)} al {formatDateLabel(sourceDateBounds.end)})
+          </button>
+        </div>
+      </div>}
+      {sourceExtendsOutsidePeriod && sourceDateBounds && <div className="notice" role="status">
+        Atención: el archivo contiene fechas fuera del período seleccionado. Solo se considerarán las jornadas entre {formatDateLabel(periodStart)} y {formatDateLabel(periodEnd)}; las demás quedarán excluidas.
+      </div>}
       {error && <div className="notice error" role="alert">{error}</div>}
       {notice && <div className="notice success" role="status">{notice}</div>}
     </section>
