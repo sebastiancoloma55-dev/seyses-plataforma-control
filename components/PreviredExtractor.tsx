@@ -552,10 +552,12 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
         "NUMERO HOJAS ANEXAS","COTIZACIONES COTIZ. LEGAL","REMUNERACION IMPONIBLE DECLARADA"
       ];
       if(excludedLabels.some(label=>normalizedLine.includes(label)))continue;
-      const rutMatch=line.match(/^\s*(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\b/);
+      // En las planillas de Previred la fila comienza con el correlativo (1, 2, 3...)
+      // y después viene el RUT. Aceptar ambos formatos, sin aceptar RUT del encabezado.
+      const rutMatch=line.match(/^\s*(?:\d{1,3}\s+)?((?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk])\b/);
       if(!rutMatch)continue;
-      const rut=formatRut(rutMatch[0]);
-      const idx=line.indexOf(rutMatch[0])+rutMatch[0].length;
+      const rut=formatRut(rutMatch[1]);
+      const idx=line.indexOf(rutMatch[1])+rutMatch[1].length;
       const rest=line.slice(idx).trim();
       const name=rest.replace(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g," ").replace(/\s+/g," ").trim().replace(/(?:AFP|JC)\s*$/i,"").trim();
       // Un trabajador debe tener un nombre plausible; rechazar encabezados y cadenas largas.
