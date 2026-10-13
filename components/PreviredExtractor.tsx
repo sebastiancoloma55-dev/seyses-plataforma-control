@@ -424,7 +424,11 @@ export default function PreviredExtractor() {
               pagesWithRows++;
               mergePlanillaRows(parsed,pageNumber,period,aggregates);
               planillaManualNeeded=true;
-            } else if(pageText.trim()) unrecognized.push(pageNumber);
+            } else if(pageText.trim()&&hasPlanillaRows) {
+              // Si la página parece contener filas de trabajadores pero el parser no pudo leerlas,
+              // marcarla como problema. Portadas, comprobantes y resúmenes sin detalle no son fallos.
+              unrecognized.push(pageNumber);
+            }
           }
           if(pageNumber===1||pageNumber===pdf.numPages||pageNumber%updateEvery===0) {
             setProgress({page:pageNumber,total:pdf.numPages,workers:new Set(Array.from(aggregates.values()).map(item=>String(item.row.RUT))).size,phase:"Leyendo y conciliando páginas"});
