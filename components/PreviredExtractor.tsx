@@ -411,11 +411,20 @@ export default function PreviredExtractor() {
           const page=await pdf.getPage(pageNumber);
           const content=await page.getTextContent();
           const source=content.items as unknown as Array<{str?:unknown;transform?:unknown;width?:unknown}>;
+          // PDF.js entrega las matrices de texto en el espacio original del PDF. Estos
+          // certificados tienen páginas rotadas 90°; aplicar la matriz del viewport antes
+          // de agrupar por coordenadas evita mezclar columnas que visualmente son filas.
+          const viewport=page.getViewport({scale:1});
+          const [va,vb,vc,vd,ve,vf]=viewport.transform;
           const items:PositionedItem[]=source
             .filter(item=>typeof item.str==="string"&&(item.str as string).trim()&&Array.isArray(item.transform))
             .map(item=>{
               const transform=item.transform as number[];
-              return {str:(item.str as string).trim(),x:Number(transform[4])||0,y:Number(transform[5])||0,width:Number(item.width)||0};
+              const originalX=Number(transform[4])||0;
+              const originalY=Number(transform[5])||0;
+              const x=va*originalX+vc*originalY+ve;
+              const y=vb*originalX+vd*originalY+vf;
+              return {str:(item.str as string).trim(),x,y,width:Number(item.width)||0};
             });
           const pageText=linesFromItems(items).map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
           // Keep PDF.js's original text sequence as a fallback when coordinate grouping
