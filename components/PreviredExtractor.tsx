@@ -388,10 +388,9 @@ export default function PreviredExtractor() {
           // Solo tratar como certificado individual si aparece la declaración legal con RUT.
           const hasIndividualCertificateHeader=/Que,\s*las\s*cotizaciones\s*previsionales\s*del\s*Sr\.?\s*\(a\)/i.test(pageText)
             && /\bRut\s*:/i.test(pageText);
-          const hasPlanillaRows=pageText.split(/\r?\n/).some(line =>
-            /^\s*\d{1,3}\s+(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/.test(line)
-            || /^\s*(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/.test(line)
-          );
+          // La extracción por coordenadas puede separar el RUT del nombre entre líneas.
+          // Detectar la fila en el texto completo, no exigir que empiece al inicio de una línea.
+          const hasPlanillaRows=/(?:^|\\s)(?:\\d{1,3}\\s+)?(?:\\d{1,2}(?:\\.\\d{3}){2}|\\d{7,8})-[\\dKk]\\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText);
           const hasContributionRows=contributionLines(pageText).matched.length>0;
           const pageMode:"certificate"|"planilla" =
             hasIndividualCertificateHeader ? "certificate" : hasPlanillaRows ? "planilla" : hasContributionRows ? "certificate" : "planilla";
@@ -617,6 +616,39 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
         else if(context==="MUTUAL"){row["Renta Mutual"]=amounts[0];if(amounts.length>1)row["Cotizacion Mutual"]=amounts[1];}
         else if(context==="CAJA"){row["_Renta_Caja_Base"]=amounts[0];if(amounts.length>1)row["Cotizacion Caja"]=amounts[1];}
       }
+      result.set(rut,row);
+    }
+
+    // Respaldo para tablas PDF en que RUT, nombre y columnas numéricas quedan en
+    // líneas visuales distintas. Recuperar filas desde el flujo completo de texto.
+    const rutPattern=/(?:^|\\s)(?:\\d{1,3}\\s+)?((?:\\d{1,2}(?:\\.\\d{3}){2}|\\d{7,8})-[\\dKk])(?=\\s)/g;
+    const found=Array.from(page.matchAll(rutPattern));
+    for(let i=0;i<found.length;i++) {
+      const item=found[i];
+      const rut=formatRut(item[1]);
+      if(result.has(rut))continue;
+      const segmentStart=(item.index||0)+item[0].length;
+      const segmentEnd=i+1<found.length?(found[i+1].index||page.length):page.length;
+      const segment=page.slice(segmentStart,segmentEnd).replace(/\\s+/g," ").trim();
+      const firstAmount=segment.search(/\\b\\d{1,3}(?:\\.\\d{3})+\\b|\\b\\d{4,}\\b/);
+      if(firstAmount<0)continue;
+      const name=segment.slice(0,firstAmount).replace(/[,:;|()[\\]]/g," ").replace(/\\s+/g," ").trim();
+      const words=name.split(/\\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
+      const normalizedName=normalize(name);
+      if(name.length>65||words.length<2||/^(RUT|APELLIDO PATERNO|NOMBRE REPRESENTANTE|RUT REPRESENTANTE|NOMBRE O RAZON SOCIAL)/.test(normalizedName))continue;
+      const amounts=(segment.match(/\\b\\d{1,3}(?:\\.\\d{3})+\\b|\\b\\d{4,}\\b/g)||[]).map(value=>parseMoney(value)).filter(value=>value>1000);
+      if(!amounts.length)continue;
+      const row=result.get(rut)||newRow(rut,name,"Período no identificado","Tipo no identificado");
+      row["Nombre PDF"]=name;
+      if(context==="SEGURO"){row["Renta Seguro Social"]=amounts[0];if(amounts.length>1)row["Monto Seguro Social"]=amounts[1];}
+      else if(context==="AFP") {
+        row["AFP"]=currentAfp;row["Renta AFP"]=amounts[0];if(amounts.length>1)row["Cotizacion AFP"]=amounts[1];if(amounts.length>2)row["SIS AFP"]=amounts[2];
+        if(amounts.length>=5){row["Renta AFC"]=amounts[3];row["AFC Empleador"]=amounts[4];}
+        else if(amounts.length>=4){row["Renta AFC"]=amounts[0];row["AFC Empleador"]=amounts[amounts.length-1];}
+      } else if(context==="FONASA"){row["Salud"]="FONASA";row["Renta Salud"]=amounts[0];if(amounts.length>1)row["Cotizacion Salud"]=amounts[1];}
+      else if(context.startsWith("ISAPRE")){row["Salud"]=context;row["Renta Salud"]=amounts[0];if(amounts.length>1)row["Cotizacion Salud"]=amounts[1];}
+      else if(context==="MUTUAL"){row["Renta Mutual"]=amounts[0];if(amounts.length>1)row["Cotizacion Mutual"]=amounts[1];}
+      else if(context==="CAJA"){row["_Renta_Caja_Base"]=amounts[0];if(amounts.length>1)row["Cotizacion Caja"]=amounts[1];}
       result.set(rut,row);
     }
   }
