@@ -26,6 +26,10 @@ type AuditRow = {
   "Líneas sin clasificar":string; "Total cotizado en PDF":number; "Total asignado en Excel":number;
   "Diferencia":number; "Estado":string;
 };
+type InstitutionSummaryCheck = {
+  institution:string; kind:"seguro"|"pension"|"afc"|"mutual"|"salud";
+  expected:number; page:number; period:string;
+};
 
 const HISTORIC_COLUMNS = [
   "RUT", "Nombre PDF", "AFP", "Salud", "Renta Seguro Social", "Monto Seguro Social",
@@ -223,6 +227,31 @@ function contributionLines(pageText:string):{
   }
   return {matched,unmatched};
 }
+function extractInstitutionSummary(text:string,page:number):InstitutionSummaryCheck[] {
+  const upper=normalize(text), period=periodFromText(text), checks:InstitutionSummaryCheck[]=[];
+  const moneyAfter=(pattern:RegExp)=>{const match=upper.match(pattern);return match?parseMoney(match[1]):null;};
+  if(upper.includes("SEGURO SOCIAL PREVISIONAL")) {
+    const amount=moneyAfter(/MONTO PAGADO\s*(?:=\s*)?([\d.]+)/);
+    if(amount!==null)checks.push({institution:"Seguro Social",kind:"seguro",expected:amount,page,period});
+  }
+  const pension=upper.match(/TOTAL A PAGAR FONDO DE PENSIONES AFP\s+(CAPITAL|CUPRUM|MODELO|PLANVITAL|PROVIDA|UNO)\s+([\d.]+)/);
+  if(pension) {
+    const institution="AFP "+pension[1].charAt(0)+pension[1].slice(1).toLowerCase();
+    checks.push({institution,kind:"pension",expected:parseMoney(pension[2]),page,period});
+    const afc=moneyAfter(/TOTAL A PAGAR AL FONDO DE CESANTIA\s+([\d.]+)/);
+    if(afc!==null)checks.push({institution,kind:"afc",expected:afc,page,period});
+  }
+  if(upper.includes("MUTUAL DE SEGURIDAD")) {
+    const amount=moneyAfter(/TOTAL A PAGAR A LA MUTUAL\s+([\d.]+)/);
+    if(amount!==null)checks.push({institution:"Mutual de Seguridad",kind:"mutual",expected:amount,page,period});
+  }
+  if(upper.includes("SUB TOTAL FONASA")) {
+    const amount=moneyAfter(/SUB TOTAL FONASA\s*=\s*([\d.]+)/);
+    if(amount!==null)checks.push({institution:"Fonasa",kind:"salud",expected:amount,page,period});
+  }
+  return checks;
+}
+
 function createAggregate(rut:string,name:string,period:string,paymentType:string):Aggregate {
   return {
     row:newRow(rut,name,period,paymentType),eventKeys:new Set<string>(),sourceTotal:0,
@@ -367,6 +396,7 @@ export default function PreviredExtractor() {
       const aggregates=new Map<string,Aggregate>();
       const unrecognized:number[]=[];
       const allUnclassified:string[]=[];
+      const institutionSummaryChecks:InstitutionSummaryCheck[]=[];
       let textPages=0;
       let pagesWithRows=0;
       let detailPagesSeen=0;
@@ -395,6 +425,7 @@ export default function PreviredExtractor() {
             .map(item=>(item.str as string).trim()).join(" ");
           page.cleanup();
           if(pageText.trim()||rawPageText.trim())textPages++;
+          institutionSummaryChecks.push(...extractInstitutionSummary(pageText,pageNumber));
           // Detectar el formato por página: algunos PDF incluyen una portada/resumen antes de los certificados.
           // Este PDF contiene varias planillas institucionales, aunque el nombre diga certificado.
           // Solo tratar como certificado individual si aparece la declaración legal con RUT.
@@ -493,6 +524,23 @@ export default function PreviredExtractor() {
             "Total asignado en Excel":excelTotal,"Diferencia":diff,"Estado":status
           };
         });
+        for(const check of institutionSummaryChecks) {
+          let actual=0;
+          const relevant=records.filter(item=>String(item.row["Período cotización"]||"")===check.period);
+          if(check.kind==="seguro")actual=relevant.reduce((sum,item)=>sum+(Number(item.row["Monto Seguro Social"])||0),0);
+          else if(check.kind==="pension")actual=relevant.filter(item=>String(item.row["AFP"]||"")===check.institution).reduce((sum,item)=>sum+(Number(item.row["Cotizacion AFP"])||0)+(Number(item.row["SIS AFP"])||0)+(Number(item.row["APVI"])||0),0);
+          else if(check.kind==="afc")actual=relevant.filter(item=>String(item.row["AFP"]||"")===check.institution).reduce((sum,item)=>sum+(Number(item.row["AFC Afiliado"])||0)+(Number(item.row["AFC Empleador"])||0),0);
+          else if(check.kind==="mutual")actual=relevant.reduce((sum,item)=>sum+(Number(item.row["Cotizacion Mutual"])||0),0);
+          else if(check.kind==="salud")actual=relevant.filter(item=>String(item.row["Salud"]||"")==="FONASA").reduce((sum,item)=>sum+(Number(item.row["Cotizacion Salud"])||0),0);
+          const diff=actual-check.expected;
+          auditRows.push({
+            "RUT":"TOTAL INSTITUCIÓN","Nombre":check.institution+(check.kind==="pension"?" · Fondo de pensiones":check.kind==="afc"?" · Seguro de cesantía":" · Resumen PDF"),
+            "Período":check.period,"Tipo pago":"REM","Páginas fuente":String(check.page),
+            "Líneas encontradas":0,"Líneas clasificadas":0,"Líneas sin clasificar":"",
+            "Total cotizado en PDF":check.expected,"Total asignado en Excel":actual,"Diferencia":diff,
+            "Estado":diff===0?"OK":"NO CONCILIADO: total institucional no coincide"
+          });
+        }
         const unknownRows=auditRows.filter(item=>item["Estado"]!=="OK");
         const hasCriticalPageIssues=unrecognized.length>0;
         const completePlanilla=mode==="planilla"&&detailPagesSeen>0&&pagesWithRows===detailPagesSeen;
@@ -591,7 +639,7 @@ function parsePlanilla(text:string,_rawText?:string):MutablePreviredRow[] {
     const match=text.match(/AFP\s+(Capital|Cuprum|Modelo|PlanVital|Provida|Uno)/i);
     if(match)currentAfp="AFP "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
   } else if(upper.includes("DETALLE DE COMPROBANTE PAGO DE COTIZACIONES")||upper.includes("MUTUAL DE SEGURIDAD")||upper.includes("ACHS")||upper.includes("INSTITUTO DE SEGURIDAD"))context="MUTUAL";
-  else if(upper.includes("COTIZACIONES DE SALUD")||upper.includes("SUB TOTAL FONASA")||upper.includes("FONASA"))context="FONASA";
+  else if(upper.includes("COTIZACIONES DE SALUD")||upper.includes("SUB TOTAL FONASA")||upper.includes("FONASA")||upper.includes("COTIZACION 7%")||upper.includes("COTIZACION 2.8%"))context="FONASA";
   else if(upper.includes("COTIZACION DE NO AFILIADO A ISAPRE")||upper.includes("CAJA DE COMPENSACION")||upper.includes("LOS HEROES")||upper.includes("LOS ANDES"))context="CAJA";
   else if(upper.includes("ISAPRE")) {
     context="ISAPRE";
