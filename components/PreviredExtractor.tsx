@@ -381,8 +381,13 @@ export default function PreviredExtractor() {
               return {str:(item.str as string).trim(),x:Number(transform[4])||0,y:Number(transform[5])||0,width:Number(item.width)||0};
             });
           const pageText=linesFromItems(items).map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+          // Keep PDF.js's original text sequence as a fallback when coordinate grouping
+          // splits cells belonging to one worker row.
+          const rawPageText=source
+            .filter(item=>typeof item.str==="string"&&(item.str as string).trim())
+            .map(item=>(item.str as string).trim()).join(" ");
           page.cleanup();
-          if(pageText.trim())textPages++;
+          if(pageText.trim()||rawPageText.trim())textPages++;
           // Detectar el formato por página: algunos PDF incluyen una portada/resumen antes de los certificados.
           // Este PDF contiene varias planillas institucionales, aunque el nombre diga certificado.
           // Solo tratar como certificado individual si aparece la declaración legal con RUT.
@@ -390,7 +395,8 @@ export default function PreviredExtractor() {
             && /\bRut\s*:/i.test(pageText);
           // La extracción por coordenadas puede separar el RUT del nombre entre líneas.
           // Detectar la fila en el texto completo, no exigir que empiece al inicio de una línea.
-          const hasPlanillaRows=/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText);
+          const hasPlanillaRows=/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText)
+            ||/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(rawPageText);
           const hasContributionRows=contributionLines(pageText).matched.length>0;
           const pageMode:"certificate"|"planilla" =
             hasIndividualCertificateHeader ? "certificate" : hasPlanillaRows ? "planilla" : hasContributionRows ? "certificate" : "planilla";
@@ -412,7 +418,7 @@ export default function PreviredExtractor() {
               unrecognized.push(pageNumber);
             }
           } else if(pageMode==="planilla") {
-            const parsed=parsePlanilla(pageText) as MutablePreviredRow[];
+            const parsed=parsePlanilla(pageText,rawPageText) as MutablePreviredRow[];
             const period=periodFromText(pageText);
             const paymentType=paymentTypeFromText(pageText);
             for(const row of parsed) {
@@ -554,7 +560,7 @@ export default function PreviredExtractor() {
   </div>;
 }
 
-function parsePlanilla(text:string):MutablePreviredRow[] {
+function parsePlanilla(text:string,rawText?:string):MutablePreviredRow[] {
   const result=new Map<string,MutablePreviredRow>();
   const pages=text.split(/\f/);
   for(const page of pages) {
@@ -657,6 +663,11 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
       if(String(row["Salud"]).includes("ISAPRE"))row["Renta Caja Isapre"]=Number(row["_Renta_Caja_Base"])||0;
       else row["Renta Caja No Isapre"]=Number(row["_Renta_Caja_Base"])||0;
     }
+  }
+  // Fallback: PDF.js sometimes returns text in content-stream order rather than
+  // visual rows. If no row was parsed, retry the original stream and recover by RUT.
+  if(result.size===0&&rawText&&rawText.trim()&&rawText!==text) {
+    return parsePlanilla(rawText);
   }
   return [...result.values()];
 }
