@@ -107,6 +107,24 @@ function monthLabel(month:string,year:string) {
   };
   return (months[normalize(month).replace(/\./g,"")]||month)+" "+year;
 }
+function periodFromText(text:string):string {
+  const named=text.match(new RegExp("\\b("+MONTHS+")\\s+(20\\d{2})\\b","i"));
+  if(named)return monthLabel(named[1],named[2]);
+  const numeric=text.match(/\b(0?[1-9]|1[0-2])\s*[\/.-]\s*(20\d{2})\b/);
+  if(numeric) {
+    const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    return monthNames[Number(numeric[1])-1]+" "+numeric[2];
+  }
+  return "Período no identificado";
+}
+function paymentTypeFromText(text:string):string {
+  const explicit=text.match(/\b(REM|GRA|RET|LEY|COM)\b/i);
+  if(explicit)return explicit[1].toUpperCase();
+  const upper=normalize(text);
+  if(/PERIODO DE REMUNERACIONES|REMUNERACIONES DEL MES|RENTA IMPONIBLE/.test(upper))return "REM";
+  if(/GRATIFICACION LEGAL/.test(upper))return "GRA";
+  return "Tipo no identificado";
+}
 function classifyInstitution(institution:string):
   {label:string;baseColumn?:string;amountColumn?:string;afp?:string;health?:string}|null {
   const inst=normalize(institution);
@@ -382,12 +400,11 @@ export default function PreviredExtractor() {
             }
           } else if(pageMode==="planilla") {
             const parsed=parsePlanilla(pageText) as MutablePreviredRow[];
-            const periodMatch=pageText.match(new RegExp("("+MONTHS+")\\s+(\\d{4})","i"));
-            const paymentMatch=pageText.match(/\b(REM|GRA|RET|LEY|COM)\b/i);
-            const period=periodMatch?monthLabel(periodMatch[1],periodMatch[2]):"Período no identificado";
+            const period=periodFromText(pageText);
+            const paymentType=paymentTypeFromText(pageText);
             for(const row of parsed) {
               row["Período cotización"]=period;
-              row["Tipo Pago"]=paymentMatch?paymentMatch[1].toUpperCase():"Tipo no identificado";
+              row["Tipo Pago"]=paymentType;
             }
             if(parsed.length) {
               pagesWithRows++;
@@ -554,12 +571,16 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
       if(excludedLabels.some(label=>normalizedLine.includes(label)))continue;
       // En las planillas de Previred la fila comienza con el correlativo (1, 2, 3...)
       // y después viene el RUT. Aceptar ambos formatos, sin aceptar RUT del encabezado.
-      const rutMatch=line.match(/^\s*(?:\d{1,3}\s+)?((?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk])\b/);
+      const rutMatch=line.match(/^\s*(?:N[°ºo]?\s*)?(?:\d{1,3}\s+)?((?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk])\b/);
       if(!rutMatch)continue;
       const rut=formatRut(rutMatch[1]);
       const idx=line.indexOf(rutMatch[1])+rutMatch[1].length;
       const rest=line.slice(idx).trim();
-      const name=rest.replace(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g," ").replace(/\s+/g," ").trim().replace(/(?:AFP|JC)\s*$/i,"").trim();
+      const name=rest
+        .replace(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g," ")
+        .replace(/\b(?:AFP|JC|APV|SIS|REM|GRA|RET|LEY|COM)\b/gi," ")
+        .replace(/[\/|()[\],;:]+/g," ")
+        .replace(/\s+/g," ").trim();
       // Un trabajador debe tener un nombre plausible; rechazar encabezados y cadenas largas.
       const nameWords=name.split(/\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
       if(name.length>80||nameWords.length<2||!/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(name))continue;
