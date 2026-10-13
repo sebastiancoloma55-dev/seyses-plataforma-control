@@ -390,7 +390,7 @@ export default function PreviredExtractor() {
             && /\bRut\s*:/i.test(pageText);
           // La extracción por coordenadas puede separar el RUT del nombre entre líneas.
           // Detectar la fila en el texto completo, no exigir que empiece al inicio de una línea.
-          const hasPlanillaRows=/(?:^|\\s)(?:\\d{1,3}\\s+)?(?:\\d{1,2}(?:\\.\\d{3}){2}|\\d{7,8})-[\\dKk]\\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText);
+          const hasPlanillaRows=/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText);
           const hasContributionRows=contributionLines(pageText).matched.length>0;
           const pageMode:"certificate"|"planilla" =
             hasIndividualCertificateHeader ? "certificate" : hasPlanillaRows ? "planilla" : hasContributionRows ? "certificate" : "planilla";
@@ -621,7 +621,7 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
 
     // Respaldo para tablas PDF en que RUT, nombre y columnas numéricas quedan en
     // líneas visuales distintas. Recuperar filas desde el flujo completo de texto.
-    const rutPattern=/(?:^|\\s)(?:\\d{1,3}\\s+)?((?:\\d{1,2}(?:\\.\\d{3}){2}|\\d{7,8})-[\\dKk])(?=\\s)/g;
+    const rutPattern=/(?:^|\s)(?:\d{1,3}\s+)?((?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk])(?=\s)/g;
     const found=Array.from(page.matchAll(rutPattern));
     for(let i=0;i<found.length;i++) {
       const item=found[i];
@@ -629,14 +629,14 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
       if(result.has(rut))continue;
       const segmentStart=(item.index||0)+item[0].length;
       const segmentEnd=i+1<found.length?(found[i+1].index||page.length):page.length;
-      const segment=page.slice(segmentStart,segmentEnd).replace(/\\s+/g," ").trim();
-      const firstAmount=segment.search(/\\b\\d{1,3}(?:\\.\\d{3})+\\b|\\b\\d{4,}\\b/);
+      const segment=page.slice(segmentStart,segmentEnd).replace(/\s+/g," ").trim();
+      const firstAmount=segment.search(/\b\d{1,3}(?:\.\d{3})+\b|\b\d{4,}\b/);
       if(firstAmount<0)continue;
-      const name=segment.slice(0,firstAmount).replace(/[,:;|()[\\]]/g," ").replace(/\\s+/g," ").trim();
-      const words=name.split(/\\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
+      const name=segment.slice(0,firstAmount).replace(/[,:;|()[\]]/g," ").replace(/\s+/g," ").trim();
+      const words=name.split(/\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
       const normalizedName=normalize(name);
       if(name.length>65||words.length<2||/^(RUT|APELLIDO PATERNO|NOMBRE REPRESENTANTE|RUT REPRESENTANTE|NOMBRE O RAZON SOCIAL)/.test(normalizedName))continue;
-      const amounts=(segment.match(/\\b\\d{1,3}(?:\\.\\d{3})+\\b|\\b\\d{4,}\\b/g)||[]).map(value=>parseMoney(value)).filter(value=>value>1000);
+      const amounts=(segment.match(/\b\d{1,3}(?:\.\d{3})+\b|\b\d{4,}\b/g)||[]).map(value=>parseMoney(value)).filter(value=>value>1000);
       if(!amounts.length)continue;
       const row=result.get(rut)||newRow(rut,name,"Período no identificado","Tipo no identificado");
       row["Nombre PDF"]=name;
