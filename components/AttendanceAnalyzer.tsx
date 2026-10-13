@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import * as XLSX from "xlsx";
 import { getSupabase } from "@/lib/supabase";
 
@@ -290,219 +290,219 @@ function parseTalanaShortDate(value: string, year: number): string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0,10)===iso ? iso : "";
 }
 
-function parseTalanaAttendanceRows(
-  pages: Array<{tokens:PositionedPdfToken[];lines:PdfVisualLine[];width:number}>,
-  fullText: string,
-  file: File
-): {headers:string[];rows:RawRow[];pages:number;erp:string;employeesDetected:number} {
-  const yearMatch = fullText.match(/\b(?:19|20)\d{2}\b/);
-  const fallbackYear = yearMatch ? Number(yearMatch[0]) : new Date().getFullYear();
+type AttendancePdfProgress = { page:number; total:number; rows:number; workers:number };
+
+function parseTalanaAttendancePage(
+  page:{tokens:PositionedPdfToken[];lines:PdfVisualLine[];width:number},
+  pageNumber:number,
+  fallbackYear:number,
+  file:File,
+  totalPages:number
+):{rows:RawRow[];rut:string;name:string;hasDateRows:boolean} {
   const columns = [
     "RUT", "Nombre empleado", "Sucursal", "Fecha", "Turno asignado",
     "Inicio turno planificado", "Fin turno planificado", "Entrada", "Salida",
     "H. Trabajadas", "H. Ext.", "Desc.", "Justificación", "Horas Asignadas"
   ];
   const rows:RawRow[] = [];
-  const employeeKeys = new Set<string>();
-  const missingIdentityPages:number[] = [];
-  const rutPattern = /\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
-  const baseBoundaries = [60,151,214,246,276,311,345,390,456,520,560];
+  const lines=page.lines;
+  const pageText=lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+  const normalizedPageText=pageText.replace(/\s+/g," ");
+  const pageYearMatch=pageText.match(/\b(?:19|20)\d{2}\b/);
+  const reportYear=pageYearMatch?Number(pageYearMatch[0]):fallbackYear;
+  const rutPattern=/\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
+  const employee=extractPdfLabelValue(lines,"Empleado")||extractPdfLabelValue(lines,"Nombre");
+  const employeeLine=lines.map(line=>line.items.map(item=>item.str).join(" ").replace(/\s+/g," ").trim()).find(line=>/\bEmpleado\b/i.test(line));
+  const labelledRut=extractPdfLabelValue(lines,"Rut").match(rutPattern)?.[0]?.toUpperCase()??"";
+  const employeeLineRut=employeeLine?.match(rutPattern)?.[0]?.toUpperCase()??"";
+  const pageFirstRut=normalizedPageText.match(rutPattern)?.[0]?.toUpperCase()??"";
+  const filenameRut=totalPages===1?(file.name.match(rutPattern)?.[0]?.toUpperCase()??""):"";
+  const rut=employeeLineRut||labelledRut||pageFirstRut||filenameRut;
+  const branch=extractPdfLabelValue(lines,"Sucursal");
+  const baseBoundaries=[60,151,214,246,276,311,345,390,456,520,560];
+  const scale=page.width/595;
+  const boundaries=baseBoundaries.map(value=>value*scale);
 
-  // Every page in a Talana "Reporte individual de asistencia" has its own
-  // employee header. Never reuse the first page's RUT/name for the rest.
-  for (let pageIndex=0; pageIndex<pages.length; pageIndex++) {
-    const page = pages[pageIndex];
-    const lines = page.lines;
-    const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
-    const normalizedPageText = pageText.replace(/\s+/g," ");
-    const pageYearMatch = pageText.match(/\b(?:19|20)\d{2}\b/);
-    const reportYear = pageYearMatch ? Number(pageYearMatch[0]) : fallbackYear;
-
-    const employee = extractPdfLabelValue(lines,"Empleado") || extractPdfLabelValue(lines,"Nombre");
-    const employeeLine = lines
-      .map(line=>line.items.map(item=>item.str).join(" ").replace(/\s+/g," ").trim())
-      .find(line=>/\bEmpleado\b/i.test(line));
-    const labelledRut = extractPdfLabelValue(lines,"Rut").match(rutPattern)?.[0]?.toUpperCase() ?? "";
-    const employeeLineRut = employeeLine?.match(rutPattern)?.[0]?.toUpperCase() ?? "";
-    const pageFirstRut = normalizedPageText.match(rutPattern)?.[0]?.toUpperCase() ?? "";
-    const singlePersonFilenameRut = pages.length===1 ? (file.name.match(rutPattern)?.[0]?.toUpperCase() ?? "") : "";
-    const rut = employeeLineRut || labelledRut || pageFirstRut || singlePersonFilenameRut;
-    const branch = extractPdfLabelValue(lines,"Sucursal");
-
-    const scale = page.width / 595;
-    const boundaries = baseBoundaries.map(value=>value*scale);
-    let rowsOnThisPage = 0;
-
-    for (const line of lines) {
-      const cells = Array.from({length:12},()=>[] as string[]);
-      for (const item of line.items) {
-        let cellIndex=0;
-        while (cellIndex<boundaries.length && item.x>=boundaries[cellIndex]) cellIndex++;
-        cells[cellIndex].push(item.str);
-      }
-      const dateCell = cells[0].join(" ").replace(/\s+/g," ").trim();
-      const date = parseTalanaShortDate(dateCell,reportYear);
-      if (!date) continue;
-
-      const schedule = cells[2].join(" ").replace(/\s+/g," ").trim();
-      const times = schedule.match(/\b(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\b/);
-      const plannedStart = times?.[1] ?? "";
-      const plannedEnd = times?.[2] ?? "";
-      const turn = cells[1].join(" ").replace(/\s+/g," ").trim();
-      const reason = cells[9].join(" ").replace(/\s+/g," ").trim();
-      const worked = cells[5].join(" ").trim();
-      const extra = cells[6].join(" ").trim();
-      const lateness = cells[7].join(" ").trim();
-      const assigned = cells[10].join(" ").trim();
-
-      rows.push({
-        "RUT":rut,
-        "Nombre empleado":employee,
-        "Sucursal":branch,
-        "Fecha":date,
-        "Turno asignado":turn,
-        "Inicio turno planificado":plannedStart,
-        "Fin turno planificado":plannedEnd,
-        "Entrada":cells[3].join(" ").trim(),
-        "Salida":cells[4].join(" ").trim(),
-        "H. Trabajadas":worked,
-        "H. Ext.":extra,
-        "Desc.":lateness,
-        "Justificación":reason,
-        "Horas Asignadas":assigned
-      });
-      rowsOnThisPage++;
+  for(const line of lines) {
+    const cells=Array.from({length:12},()=>[] as string[]);
+    for(const item of line.items) {
+      let cellIndex=0;
+      while(cellIndex<boundaries.length&&item.x>=boundaries[cellIndex])cellIndex++;
+      cells[cellIndex].push(item.str);
     }
-
-    if (rowsOnThisPage>0) {
-      if (!rut || !employee) {
-        missingIdentityPages.push(pageIndex+1);
-      } else {
-        employeeKeys.add(rut.replace(/[.\s]/g,"").toUpperCase());
-      }
-    }
+    const dateCell=cells[0].join(" ").replace(/\s+/g," ").trim();
+    const date=parseTalanaShortDate(dateCell,reportYear);
+    if(!date)continue;
+    const schedule=cells[2].join(" ").replace(/\s+/g," ").trim();
+    const times=schedule.match(/\b(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\b/);
+    rows.push({
+      "RUT":rut,
+      "Nombre empleado":employee,
+      "Sucursal":branch,
+      "Fecha":date,
+      "Turno asignado":cells[1].join(" ").replace(/\s+/g," ").trim(),
+      "Inicio turno planificado":times?.[1]??"",
+      "Fin turno planificado":times?.[2]??"",
+      "Entrada":cells[3].join(" ").trim(),
+      "Salida":cells[4].join(" ").trim(),
+      "H. Trabajadas":cells[5].join(" ").trim(),
+      "H. Ext.":cells[6].join(" ").trim(),
+      "Desc.":cells[7].join(" ").trim(),
+      "Justificación":cells[9].join(" ").replace(/\s+/g," ").trim(),
+      "Horas Asignadas":cells[10].join(" ").trim()
+    });
   }
-
-  if (!rows.length) {
-    throw new Error("Reconocí que es un Reporte individual de asistencia de Talana, pero no pude separar sus filas. El PDF debe contener texto digital; revisa que no esté escaneado ni protegido.");
-  }
-  if (missingIdentityPages.length) {
-    throw new Error("Se detectaron jornadas, pero faltan el RUT o el nombre del trabajador en " + missingIdentityPages.length + " página(s). No se importó nada para evitar mezclar a varias personas. Revisa el PDF de origen.");
-  }
-  // If a multi-page bulk report collapses to a single identity, stop before
-  // import instead of letting aggregateAttendance merge everyone together.
-  if (pages.length>1 && employeeKeys.size<2) {
-    throw new Error("El PDF contiene varias páginas, pero el lector solo detectó un trabajador distinto. Se bloqueó la importación para no fusionar a todas las personas como si fueran una. Revisa el archivo o informa este caso a soporte.");
-  }
-  return {headers:columns,rows,pages:pages.length,erp:"Talana",employeesDetected:employeeKeys.size};
+  return {rows,rut,name:employee,hasDateRows:rows.length>0};
 }
 
-async function parseAttendancePdf(file: File): Promise<{ headers: string[]; rows: RawRow[]; pages: number; erp?:string; employeesDetected?:number }> {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url).toString();
-  const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-  const pages: Array<{tokens:PositionedPdfToken[];lines:PdfVisualLine[];width:number}> = [];
-  let fullText = "";
-  let pagesWithText = 0;
-  const rutPattern = /\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
+async function parseAttendancePdf(
+  file:File,
+  onProgress?:(progress:AttendancePdfProgress)=>void,
+  isCancelled?:()=>boolean
+):Promise<{headers:string[];rows:RawRow[];pages:number;erp?:string;employeesDetected?:number}> {
+  const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs",import.meta.url).toString();
+  const pdf=await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer()),stopAtErrors:true}).promise;
+  if(pdf.numPages>10000) {
+    await pdf.destroy();
+    throw new Error("El PDF tiene "+pdf.numPages.toLocaleString("es-CL")+" páginas. El máximo por archivo es 10.000; divide el reporte en varios PDF.");
+  }
+
+  let textPages=0;
+  let mode:"talana"|"generic"|null=null;
+  let fallbackYear=new Date().getFullYear();
+  let rememberedHeader:{bottomY:number;anchors:PdfFieldAnchor[]}|null=null;
+  const rows:RawRow[]=[];
+  const discoveredKeys=new Set<FieldKey>();
+  const employeeKeys=new Set<string>();
+  const missingIdentityPages:number[]=[];
+  const pagesWithoutRows:number[]=[];
+  const genericRutPattern=/\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
+  const updateEvery=Math.max(1,Math.ceil(pdf.numPages/100));
 
   try {
-    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
-      const page = await document.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const rawItems = content.items as unknown as Array<{ str?: unknown; transform?: unknown; width?: unknown }>;
-      const tokens: PositionedPdfToken[] = rawItems
-        .filter(item => typeof item.str === "string" && item.str.trim() && Array.isArray(item.transform))
-        .map(item => {
-          const transform = item.transform as number[];
+    for(let pageNumber=1;pageNumber<=pdf.numPages;pageNumber++) {
+      if(isCancelled?.())throw new Error("Lectura del PDF cancelada. No se importó ningún registro.");
+      const page=await pdf.getPage(pageNumber);
+      const content=await page.getTextContent();
+      const rawItems=content.items as unknown as Array<{str?:unknown;transform?:unknown;width?:unknown}>;
+      const tokens:PositionedPdfToken[]=rawItems
+        .filter(item=>typeof item.str==="string"&&item.str.trim()&&Array.isArray(item.transform))
+        .map(item=>{
+          const transform=item.transform as number[];
           return {str:(item.str as string).trim(),x:Number(transform[4])||0,y:Number(transform[5])||0,width:Number(item.width)||0};
         });
-      if (!tokens.length) continue;
-      pagesWithText++;
-      const lines = groupPdfVisualLines(tokens);
-      const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
-      fullText += pageText + "\n";
-      pages.push({tokens,lines,width:page.getViewport({scale:1}).width});
-    }
-
-    if (!pagesWithText) {
-      throw new Error("El PDF no tiene texto seleccionable. Si es un escaneo o una imagen, necesitará OCR; por ahora descarga el reporte como PDF digital o Excel desde el ERP.");
-    }
-    if (/reporte individual de asistencia/i.test(fullText) && /h\.\s*trab/i.test(fullText)) {
-      return parseTalanaAttendanceRows(pages,fullText,file);
-    }
-
-    // Generic digital PDF fallback for other ERP reports that expose clear,
-    // full-date rows and recognizable headers.
-    const rows:RawRow[] = [];
-    const discoveredKeys = new Set<FieldKey>();
-    let rememberedHeader: { bottomY:number; anchors:PdfFieldAnchor[] } | null = null;
-    for (const page of pages) {
-      const lines = page.lines;
-      const detectedHeader = findUniversalPdfHeader(lines);
-      if (detectedHeader) rememberedHeader = detectedHeader;
-      const header = detectedHeader ?? rememberedHeader;
-      if (!header) continue;
-      const pageText = lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
-      const normalizedPageText = pageText.replace(/\s+/g," ");
-      const labelledRut = extractPdfLabelValue(lines,"RUT").match(rutPattern)?.[0]?.toUpperCase() ?? "";
-      const filenameRut = file.name.match(rutPattern)?.[0]?.toUpperCase() ?? "";
-      const rut = labelledRut || filenameRut || normalizedPageText.match(rutPattern)?.[0]?.toUpperCase() || "";
-      const employeeName = extractPdfLabelValue(lines,"Empleado") || extractPdfLabelValue(lines,"Nombre");
-      const branch = extractPdfLabelValue(lines,"Sucursal");
-      const ordered = [...header.anchors].sort((a,b)=>a.x-b.x);
-      const candidateLines = lines.filter(line=>{
-        const joined=line.items.map(item=>item.str).join(" ");
-        return line.y < header.bottomY && PDF_DATE_PATTERN.test(joined);
-      });
-      for (const line of candidateLines) {
-        const rowItems = page.tokens.filter(item=>Math.abs(item.y-line.y)<=5.5).sort((a,b)=>a.x-b.x);
-        const rowText = rowItems.map(item=>item.str).join(" ");
-        const dateMatch = rowText.match(PDF_DATE_PATTERN);
-        if (!dateMatch) continue;
-        const date = parseDate(dateMatch[0]);
-        if (!date) continue;
-        const cells = new Map<FieldKey,string[]>();
-        for (const anchor of ordered) cells.set(anchor.key,[]);
-        for (const item of rowItems) {
-          let index = 0;
-          for (let i=1;i<ordered.length;i++) {
-            const boundary=(ordered[i-1].x+ordered[i].x)/2;
-            if(item.x>=boundary) index=i; else break;
-          }
-          cells.get(ordered[index].key)?.push(item.str);
-        }
-        const cell = (key:FieldKey) => (cells.get(key)||[]).join(" ").replace(/\s+/g," ").trim();
-        const row: RawRow = {};
-        for (const anchor of ordered) {
-          const field = FIELDS.find(item=>item.key===anchor.key);
-          if (!field) continue;
-          discoveredKeys.add(anchor.key);
-          row[field.label] = anchor.key==="work_date" ? date : cell(anchor.key);
-        }
-        const rutAnchor = ordered.some(anchor=>anchor.key==="worker_rut");
-        const nameAnchor = ordered.some(anchor=>anchor.key==="worker_name");
-        const rutField = FIELDS.find(item=>item.key==="worker_rut")!;
-        const nameField = FIELDS.find(item=>item.key==="worker_name")!;
-        if (!rutAnchor) { row[rutField.label] = rut; discoveredKeys.add("worker_rut"); }
-        if (!nameAnchor) { row[nameField.label] = employeeName; discoveredKeys.add("worker_name"); }
-        const branchAnchor = ordered.some(anchor=>anchor.key==="branch");
-        if (!branchAnchor && branch) {
-          row[FIELDS.find(item=>item.key==="branch")!.label] = branch;
-          discoveredKeys.add("branch");
-        }
-        row[FIELDS.find(item=>item.key==="work_date")!.label] = date;
-        if (String(row[rutField.label]??"").trim() || String(row[nameField.label]??"").trim()) rows.push(row);
+      if(!tokens.length) {
+        pagesWithoutRows.push(pageNumber);
+        if(pageNumber%5===0)await new Promise(resolve=>setTimeout(resolve,0));
+        continue;
       }
+      textPages++;
+      const lines=groupPdfVisualLines(tokens);
+      const pageText=lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+      if(!mode) {
+        mode=/reporte individual de asistencia/i.test(pageText)&&/h\.\s*trab/i.test(pageText)?"talana":"generic";
+        const yearMatch=pageText.match(/\b(?:19|20)\d{2}\b/);
+        if(yearMatch)fallbackYear=Number(yearMatch[0]);
+      }
+
+      if(mode==="talana") {
+        const parsed=parseTalanaAttendancePage({tokens,lines,width:page.getViewport({scale:1}).width},pageNumber,fallbackYear,file,pdf.numPages);
+        if(!parsed.hasDateRows) {
+          pagesWithoutRows.push(pageNumber);
+        } else {
+          rows.push(...parsed.rows);
+          if(!parsed.rut||!parsed.name)missingIdentityPages.push(pageNumber);
+          else employeeKeys.add(parsed.rut.replace(/[.\s]/g,"").toUpperCase());
+        }
+      } else {
+        const detectedHeader=findUniversalPdfHeader(lines);
+        if(detectedHeader)rememberedHeader=detectedHeader;
+        const header=detectedHeader??rememberedHeader;
+        if(header) {
+          const normalizedPageText=pageText.replace(/\s+/g," ");
+          const labelledRut=extractPdfLabelValue(lines,"RUT").match(genericRutPattern)?.[0]?.toUpperCase()??"";
+          const filenameRut=pdf.numPages===1?(file.name.match(genericRutPattern)?.[0]?.toUpperCase()??""):"";
+          const rut=labelledRut||filenameRut||normalizedPageText.match(genericRutPattern)?.[0]?.toUpperCase()||"";
+          const employeeName=extractPdfLabelValue(lines,"Empleado")||extractPdfLabelValue(lines,"Nombre");
+          const branch=extractPdfLabelValue(lines,"Sucursal");
+          const ordered=[...header.anchors].sort((a,b)=>a.x-b.x);
+          let rowsThisPage=0;
+          const candidateLines=lines.filter(line=>{
+            const joined=line.items.map(item=>item.str).join(" ");
+            return line.y<header.bottomY&&PDF_DATE_PATTERN.test(joined);
+          });
+          for(const line of candidateLines) {
+            const rowItems=tokens.filter(item=>Math.abs(item.y-line.y)<=5.5).sort((a,b)=>a.x-b.x);
+            const rowText=rowItems.map(item=>item.str).join(" ");
+            const dateMatch=rowText.match(PDF_DATE_PATTERN);
+            if(!dateMatch)continue;
+            const date=parseDate(dateMatch[0]);
+            if(!date)continue;
+            const cells=new Map<FieldKey,string[]>();
+            for(const anchor of ordered)cells.set(anchor.key,[]);
+            for(const item of rowItems) {
+              let index=0;
+              for(let i=1;i<ordered.length;i++) {
+                const boundary=(ordered[i-1].x+ordered[i].x)/2;
+                if(item.x>=boundary)index=i;else break;
+              }
+              cells.get(ordered[index].key)?.push(item.str);
+            }
+            const cell=(key:FieldKey)=>(cells.get(key)||[]).join(" ").replace(/\s+/g," ").trim();
+            const row:RawRow={};
+            for(const anchor of ordered) {
+              const field=FIELDS.find(item=>item.key===anchor.key);
+              if(!field)continue;
+              discoveredKeys.add(anchor.key);
+              row[field.label]=anchor.key==="work_date"?date:cell(anchor.key);
+            }
+            const rutAnchor=ordered.some(anchor=>anchor.key==="worker_rut");
+            const nameAnchor=ordered.some(anchor=>anchor.key==="worker_name");
+            const rutField=FIELDS.find(item=>item.key==="worker_rut")!;
+            const nameField=FIELDS.find(item=>item.key==="worker_name")!;
+            if(!rutAnchor){row[rutField.label]=rut;discoveredKeys.add("worker_rut");}
+            if(!nameAnchor){row[nameField.label]=employeeName;discoveredKeys.add("worker_name");}
+            if(!ordered.some(anchor=>anchor.key==="branch")&&branch) {
+              row[FIELDS.find(item=>item.key==="branch")!.label]=branch;
+              discoveredKeys.add("branch");
+            }
+            row[FIELDS.find(item=>item.key==="work_date")!.label]=date;
+            if(String(row[rutField.label]??"").trim()||String(row[nameField.label]??"").trim()) {
+              rows.push(row);rowsThisPage++;
+            }
+          }
+          if(!rowsThisPage)pagesWithoutRows.push(pageNumber);
+        } else pagesWithoutRows.push(pageNumber);
+      }
+      if(pageNumber===1||pageNumber===pdf.numPages||pageNumber%updateEvery===0) {
+        onProgress?.({page:pageNumber,total:pdf.numPages,rows:rows.length,workers:employeeKeys.size});
+      }
+      if(pageNumber%5===0)await new Promise(resolve=>setTimeout(resolve,0));
     }
-    if (!rows.length) {
-      throw new Error("No pude detectar filas del PDF. Los formatos de asistencia difieren entre ERP; descarga el reporte como Excel/CSV o solicita un adaptador para ese modelo de PDF digital.");
+    if(!textPages)throw new Error("El PDF no tiene texto seleccionable. Si es un escaneo o imagen, necesitará OCR; por ahora descarga un PDF digital o Excel desde el ERP.");
+    if(!rows.length)throw new Error("No pude detectar filas del PDF. Los formatos de asistencia difieren entre ERP; descarga Excel/CSV o solicita un adaptador para este modelo.");
+    if(mode==="talana"&&missingIdentityPages.length) {
+      throw new Error("Se detectaron jornadas pero faltan RUT o nombre en "+missingIdentityPages.length+" página(s). Se bloqueó el archivo para evitar fusionar trabajadores. Primeras páginas: "+missingIdentityPages.slice(0,30).join(", "));
     }
-    const orderedKeys = [...discoveredKeys];
-    const headerKeys = orderedKeys.filter(key=>rows.some(row=>Object.prototype.hasOwnProperty.call(row,FIELDS.find(field=>field.key===key)!.label)));
-    return {headers:headerKeys.map(key=>FIELDS.find(field=>field.key===key)!.label),rows,pages:document.numPages};
+    if(mode==="talana"&&pdf.numPages>1&&employeeKeys.size<2) {
+      throw new Error("El PDF contiene varias páginas, pero el lector detectó menos de dos trabajadores distintos. La importación se bloqueó para evitar fusionar a todas las personas en una sola.");
+    }
+    if(mode==="talana"&&pagesWithoutRows.length) {
+      throw new Error("No pude verificar jornadas en "+pagesWithoutRows.length+" página(s). No se importó nada para evitar omitir personas o días. Primeras páginas: "+pagesWithoutRows.slice(0,30).join(", "));
+    }
+    if(mode==="generic") {
+      if(pagesWithoutRows.length)throw new Error("No se pudieron leer filas de asistencia en "+pagesWithoutRows.length+" página(s). Se bloqueó la importación para evitar cargar un reporte incompleto.");
+      const orderedKeys=[...discoveredKeys];
+      const headerKeys=orderedKeys.filter(key=>rows.some(row=>Object.prototype.hasOwnProperty.call(row,FIELDS.find(field=>field.key===key)!.label)));
+      return {headers:headerKeys.map(key=>FIELDS.find(field=>field.key===key)!.label),rows,pages:pdf.numPages,erp:"ERP genérico / mapeo automático"};
+    }
+    return {
+      headers:["RUT","Nombre empleado","Sucursal","Fecha","Turno asignado","Inicio turno planificado","Fin turno planificado","Entrada","Salida","H. Trabajadas","H. Ext.","Desc.","Justificación","Horas Asignadas"],
+      rows,pages:pdf.numPages,erp:"Talana",employeesDetected:employeeKeys.size
+    };
   } finally {
-    await document.destroy();
+    await pdf.destroy();
   }
 }
 
@@ -536,6 +536,8 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
   const [savedRows, setSavedRows] = useState<AttendanceRow[]>([]);
   const [savedImport, setSavedImport] = useState<ImportInfo|null>(null);
   const [loadingSaved, setLoadingSaved] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState<AttendancePdfProgress|null>(null);
+  const cancelPdfRef = useRef(false);
 
   async function loadImports() {
     try {
@@ -579,16 +581,19 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     setError(""); setNotice(""); setFile(selected); setHeaders([]); setRawRows([]); setMapping({});
     if (!selected) return;
     const isPdf = /\.pdf$/i.test(selected.name);
-    const maxBytes = isPdf ? 35*1024*1024 : 15*1024*1024;
+    const maxBytes = isPdf ? 250*1024*1024 : 15*1024*1024;
     if (selected.size > maxBytes) {
-      setError(isPdf ? "El PDF supera 35 MB. Divide el reporte en archivos más pequeños." : "El archivo supera 15 MB. El máximo permitido para Excel/CSV es 15 MB.");
+      setError(isPdf ? "El PDF supera 250 MB. Divide el reporte en varios archivos digitales más pequeños." : "El archivo supera 15 MB. El máximo permitido para Excel/CSV es 15 MB.");
       setFile(null);
       return;
     }
     if (!isPdf && !/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible. Usa Excel (.xlsx/.xls), CSV (.csv) o un PDF digital de asistencia con tabla y encabezados reconocibles."); return; }
     if (isPdf) {
+      cancelPdfRef.current = false;
+      setPdfProgress({page:0,total:0,rows:0,workers:0});
       try {
-        const parsedPdf = await parseAttendancePdf(selected);
+        const parsedPdf = await parseAttendancePdf(selected, progress => setPdfProgress(progress), () => cancelPdfRef.current);
+        setPdfProgress(null);
         const cols = parsedPdf.headers;
         const objects = parsedPdf.rows;
         if (!objects.length || !cols.length) throw new Error("El PDF no contiene filas de asistencia utilizables.");
@@ -606,7 +611,8 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
         // cannot silently replace an intended August import.
         setNotice("PDF de asistencia leído en el navegador: " + objects.length.toLocaleString("es-CL") + " jornadas en " + parsedPdf.pages + " página(s)" + (parsedPdf.employeesDetected !== undefined ? " · " + parsedPdf.employeesDetected.toLocaleString("es-CL") + " trabajadores distintos" : "") + ". Revisa los RUT/nombres detectados antes de importar.");
       } catch (e) {
-        setError(e instanceof Error ? e.message : "No se pudo leer el PDF de Talana.");
+        setPdfProgress(null);
+        setError(e instanceof Error ? e.message : "No se pudo leer el PDF de asistencia.");
       }
       return;
     }
@@ -827,11 +833,16 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
       <div className="attendance-grid">
         <div className="field"><label htmlFor="attendance-erp">Sistema de origen</label><select id="attendance-erp" value={erp} onChange={e=>setErp(e.target.value)}>{ERP_OPTIONS.map(o=><option key={o}>{o}</option>)}</select></div>
         {erp==="Otro" && <div className="field"><label htmlFor="attendance-erp-custom">Nombre de ERP</label><input id="attendance-erp-custom" value={customErp} onChange={e=>setCustomErp(e.target.value)} placeholder="Nombre del sistema" /></div>}
-        <div className="field"><label htmlFor="attendance-file">Reporte de asistencia</label><input id="attendance-file" type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={selectFile} /></div>
+        <div className="field"><label htmlFor="attendance-file">Reporte de asistencia</label><input id="attendance-file" type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={selectFile} disabled={busy} /></div>
         <div className="field"><label htmlFor="attendance-start">Período desde</label><input id="attendance-start" type="date" value={periodStart} onChange={e=>setPeriodStart(e.target.value)} required /></div>
         <div className="field"><label htmlFor="attendance-end">Período hasta</label><input id="attendance-end" type="date" value={periodEnd} onChange={e=>setPeriodEnd(e.target.value)} required /></div>
       </div>
       {file && <div className="notice">{file.name} · {(file.size/1024).toFixed(1)} KB · {rawRows.length.toLocaleString("es-CL")} filas leídas · Dentro del período: {mapped.length.toLocaleString("es-CL")} · Excluidas/sin identificación/fecha válida: {invalidRows.toLocaleString("es-CL")}</div>}
+      {pdfProgress && <div className="notice" role="status">
+        <div style={{display:"flex",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}><strong>Procesando PDF página por página</strong><span>{pdfProgress.page.toLocaleString("es-CL")} / {pdfProgress.total.toLocaleString("es-CL")} · {pdfProgress.rows.toLocaleString("es-CL")} jornadas · {pdfProgress.workers.toLocaleString("es-CL")} trabajadores</span></div>
+        <progress value={pdfProgress.page} max={Math.max(1,pdfProgress.total)} style={{width:"100%",height:12,marginTop:8}} />
+        <div className="actions" style={{marginTop:8}}><button type="button" className="btn" onClick={()=>{cancelPdfRef.current=true;setNotice("Cancelando lectura de forma segura…");}}>Cancelar lectura PDF</button></div>
+      </div>}
       {sourceDateBounds && <div className="notice" role="status">
         Período detectado en los datos: <strong>{formatDateLabel(sourceDateBounds.start)} al {formatDateLabel(sourceDateBounds.end)}</strong>.
         {" "}Período seleccionado: <strong>{formatDateLabel(periodStart)} al {formatDateLabel(periodEnd)}</strong>.
