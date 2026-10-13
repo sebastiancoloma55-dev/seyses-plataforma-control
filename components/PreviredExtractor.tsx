@@ -110,10 +110,16 @@ function monthLabel(month:string,year:string) {
 function periodFromText(text:string):string {
   const named=text.match(new RegExp("\\b("+MONTHS+")\\s+(20\\d{2})\\b","i"));
   if(named)return monthLabel(named[1],named[2]);
-  const numeric=text.match(/\b(0?[1-9]|1[0-2])\s*[\/.-]\s*(20\d{2})\b/);
-  if(numeric) {
+  const slash=text.match(/\b(0?[1-9]|1[0-2])\s*[\/.-]\s*(20\d{2})\b/);
+  if(slash) {
     const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-    return monthNames[Number(numeric[1])-1]+" "+numeric[2];
+    return monthNames[Number(slash[1])-1]+" "+slash[2];
+  }
+  const labeled=text.match(/PERIODO(?:\s+DE)?\s+REMUNERACIONES?\s*:?\s*(0?[1-9]|1[0-2])\s+(20\d{2})/i)
+    || text.match(/PERIODO\s+DE\s+REMUNERACION\s+(0?[1-9]|1[0-2])\s+(20\d{2})/i);
+  if(labeled) {
+    const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    return monthNames[Number(labeled[1])-1]+" "+labeled[2];
   }
   return "Período no identificado";
 }
@@ -377,10 +383,17 @@ export default function PreviredExtractor() {
           page.cleanup();
           if(pageText.trim())textPages++;
           // Detectar el formato por página: algunos PDF incluyen una portada/resumen antes de los certificados.
-          const certificateMarker=/Certificado\s+de\s+Pagos|cotizaciones\s*previsionales\s*del\s*Sr/i.test(pageText);
+          // Este PDF contiene varias planillas institucionales, aunque el nombre diga certificado.
+          // Solo tratar como certificado individual si aparece la declaración legal con RUT.
+          const hasIndividualCertificateHeader=/Que,\s*las\s*cotizaciones\s*previsionales\s*del\s*Sr\.?\s*\(a\)/i.test(pageText)
+            && /\bRut\s*:/i.test(pageText);
+          const hasPlanillaRows=pageText.split(/\r?\n/).some(line =>
+            /^\s*\d{1,3}\s+(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/.test(line)
+            || /^\s*(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/.test(line)
+          );
           const hasContributionRows=contributionLines(pageText).matched.length>0;
           const pageMode:"certificate"|"planilla" =
-            certificateMarker || hasContributionRows ? "certificate" : "planilla";
+            hasIndividualCertificateHeader ? "certificate" : hasPlanillaRows ? "planilla" : hasContributionRows ? "certificate" : "planilla";
           if(pageMode==="certificate") {
             mode="certificate";
             setFileMode("certificate");
@@ -549,13 +562,14 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
       const match=page.match(/AFP\s+([A-Za-zÁÉÍÓÚÑ]+)/i);
       if(match)currentAfp="AFP "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
     } else if(upper.includes("SEGURO SOCIAL PREVISIONAL"))context="SEGURO";
-    else if(upper.includes("FONASA")||upper.includes("PLANILLA DE DECLARACION Y PAGO SIMULTANEO"))context="FONASA";
     else if(upper.includes("ISAPRE")) {
       context="ISAPRE";
       const match=page.match(/ISAPRE\s+([A-Za-zÁÉÍÓÚÑ]+)/i);
       if(match)context="ISAPRE "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
     } else if(upper.includes("MUTUAL DE SEGURIDAD")||upper.includes("ACHS")||upper.includes("INSTITUTO DE SEGURIDAD"))context="MUTUAL";
     else if(upper.includes("CAJA DE COMPENSACION")||upper.includes("LOS HEROES")||upper.includes("LOS ANDES"))context="CAJA";
+    else if(upper.includes("FONASA"))context="FONASA";
+    else if(upper.includes("PLANILLA DE DECLARACION Y PAGO SIMULTANEO"))context="FONASA";
 
     for(const originalLine of page.split(/\r?\n/)) {
       const line=originalLine.replace(/\s+/g," ").trim();
