@@ -120,8 +120,8 @@ function periodFromText(text:string):string {
     return monthNames[Number(slash[1])-1]+" "+slash[2];
   }
   const normalizedText=normalize(text);
-  const labeled=normalizedText.match(/PERIODO(?:\s+DE)?\s+REMUNERACION(?:ES)?\s*:?\s*(0?[1-9]|1[0-2])\s+(20\d{2})/i)
-    || normalizedText.match(/PERIODO\s+DE\s+REMUNERACION(?:ES)?\s+(0?[1-9]|1[0-2])\s+(20\d{2})/i);
+  const labeled=normalizedText.match(/PERIODO(?:\s+DE)?\s+(?:REMUNERACION(?:ES)?|COTIZACIONES)\s*:?\s*(0?[1-9]|1[0-2])\s+(20\d{2})/i)
+    || normalizedText.match(/PERIODO\s+DE\s+(?:REMUNERACION(?:ES)?|COTIZACIONES)\s+(0?[1-9]|1[0-2])\s+(20\d{2})/i);
   if(labeled) {
     const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
     return monthNames[Number(labeled[1])-1]+" "+labeled[2];
