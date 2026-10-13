@@ -116,8 +116,8 @@ function periodFromText(text:string):string {
     return monthNames[Number(slash[1])-1]+" "+slash[2];
   }
   const normalizedText=normalize(text);
-  const labeled=normalizedText.match(/PERIODO(?:\s+DE)?\s+REMUNERACIONES?\s*:?\s*(0?[1-9]|1[0-2])\s+(20\d{2})/i)
-    || normalizedText.match(/PERIODO\s+DE\s+REMUNERACION\s+(0?[1-9]|1[0-2])\s+(20\d{2})/i);
+  const labeled=normalizedText.match(/PERIODO(?:\s+DE)?\s+REMUNERACION(?:ES)?\s*:?\s*(0?[1-9]|1[0-2])\s+(20\d{2})/i)
+    || normalizedText.match(/PERIODO\s+DE\s+REMUNERACION(?:ES)?\s+(0?[1-9]|1[0-2])\s+(20\d{2})/i);
   if(labeled) {
     const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
     return monthNames[Number(labeled[1])-1]+" "+labeled[2];
@@ -125,12 +125,13 @@ function periodFromText(text:string):string {
   return "Período no identificado";
 }
 function paymentTypeFromText(text:string):string {
-  const explicit=text.match(/\b(REM|GRA|RET|LEY|COM)\b/i);
-  if(explicit)return explicit[1].toUpperCase();
   const upper=normalize(text);
-  if(/PERIODO DE REMUNERACIONES|REMUNERACIONES DEL MES|RENTA IMPONIBLE/.test(upper))return "REM";
-  if(/GRATIFICACION LEGAL/.test(upper))return "GRA";
-  return "Tipo no identificado";
+  // Los códigos REM/GRA/RET/LEY/COM también aparecen en códigos de movimiento y textos legales.
+  // Solo tomar GRA/RET/LEY si la casilla está marcada; en ausencia de selección, REM.
+  if(/GRATIFICACION LEGAL\s*\[\s*X\s*\]/.test(upper))return "GRA";
+  if(/RETROACTIVO\s*\[\s*X\s*\]/.test(upper))return "RET";
+  if(/PAGO POR LEY BUSTOS\s*\[\s*X\s*\]/.test(upper))return "LEY";
+  return "REM";
 }
 function classifyInstitution(institution:string):
   {label:string;baseColumn?:string;amountColumn?:string;afp?:string;health?:string}|null {
@@ -280,6 +281,11 @@ function mergePlanillaRows(
     const key=[rut,rowPeriod,paymentType].join("|");
     const aggregate=aggregates.get(key)||createAggregate(rut,String(parsedRow["Nombre PDF"]||""),rowPeriod,paymentType);
     aggregate.pages.add(pageNumber);
+    // Cada fila de planilla es evidencia independiente de una institución; sumar
+    // solo conceptos de cotización (nunca bases imponibles) para auditar el mapeo.
+    aggregate.sourceTotal+=mappedAmountTotal(parsedRow);
+    aggregate.sourceLines++;
+    aggregate.classifiedLines++;
     for(const column of HISTORIC_COLUMNS) {
       const incoming=parsedRow[column];
       if(incoming===undefined||incoming===null||incoming==="")continue;
@@ -363,6 +369,7 @@ export default function PreviredExtractor() {
       const allUnclassified:string[]=[];
       let textPages=0;
       let pagesWithRows=0;
+      let detailPagesSeen=0;
       let duplicatesSkipped=0;
       let mode:"certificate"|"planilla"|null=null;
       let fallbackIdentity:{rut:string;name:string}|null=null;
@@ -398,7 +405,7 @@ export default function PreviredExtractor() {
           // No confundir las páginas resumen del empleador/representante con
           // páginas de detalle de trabajadores: también contienen RUT y nombres.
           const employerSummary=/IDENTIFICACI[ÓO]N DEL EMPLEADOR|NOMBRE REPRESENTANTE LEGAL|RUT REPRESENTANTE LEGAL|RESUMEN DE COTIZACIONES/i.test(pageText);
-          const hasWorkerDetailHeader=/APELLIDO PATERNO|APELLIDO MATERNO|IDENTIFICACI[ÓO]N DEL TRABAJADOR|NOMBRES\s+REMUNERACI[ÓO]N/i.test(pageText);
+          const hasWorkerDetailHeader=/APELLIDO PATERNO|APELLIDO MATERNO|IDENTIFICACI[ÓO]N DEL TRABAJADOR|NOMBRES\s+REMUNERACI[ÓO]N|ANEXOS DE DETALLE|DETALLE DE COMPROBANTE|DETALLE DE PAGO DE COTIZACIONES/i.test(pageText);
           const hasPlanillaRows=!employerSummary&&hasWorkerDetailHeader&&(
             /(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText)
             ||/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(rawPageText)
@@ -413,6 +420,7 @@ export default function PreviredExtractor() {
             mode="planilla";
             setFileMode("planilla");
           }
+          if(pageMode==="planilla"&&hasPlanillaRows)detailPagesSeen++;
           if(pageMode==="certificate") {
             const result=addCertificatePage(pageText,pageNumber,aggregates,fallbackIdentity);
             if(result.identity)fallbackIdentity=result.identity;
@@ -487,7 +495,8 @@ export default function PreviredExtractor() {
         });
         const unknownRows=auditRows.filter(item=>item["Estado"]!=="OK");
         const hasCriticalPageIssues=unrecognized.length>0;
-        const canAutoReconcile=mode==="certificate"&&!unknownRows.length&&!hasCriticalPageIssues&&pagesWithRows===totalPages;
+        const completePlanilla=mode==="planilla"&&detailPagesSeen>0&&pagesWithRows===detailPagesSeen;
+        const canAutoReconcile=!unknownRows.length&&!hasCriticalPageIssues&&(mode==="certificate"?pagesWithRows===totalPages:completePlanilla);
         setRows(outputRows);
         setAudit(auditRows);
         setUnrecognizedPages(unrecognized);
@@ -498,7 +507,7 @@ export default function PreviredExtractor() {
         if(canAutoReconcile) {
           setMessage("Conciliación automática correcta: "+new Set(records.map(item=>String(item.row.RUT))).size.toLocaleString("es-CL")+" trabajadores · "+records.length.toLocaleString("es-CL")+" filas por período/tipo · "+pagesWithRows.toLocaleString("es-CL")+"/"+totalPages.toLocaleString("es-CL")+" páginas procesadas · diferencias $0. "+(duplicatesSkipped?duplicatesSkipped+" duplicados exactos omitidos. ":"")+"Se añadió la hoja Control_Validacion.");
         } else if(mode==="planilla"&&planillaManualNeeded) {
-          setMessage("Se leyeron "+records.length.toLocaleString("es-CL")+" registros de planilla y "+pagesWithRows.toLocaleString("es-CL")+"/"+totalPages.toLocaleString("es-CL")+" páginas con datos. Este formato requiere revisión manual antes de habilitar la descarga, porque la estructura de planillas varía entre instituciones.");
+          setMessage("Se leyeron "+records.length.toLocaleString("es-CL")+" registros de planilla y "+pagesWithRows.toLocaleString("es-CL")+"/"+detailPagesSeen.toLocaleString("es-CL")+" páginas de detalle. Revisa las diferencias del control; la descarga automática sigue bloqueada.");
         } else {
           setMessage("Se encontraron "+records.length.toLocaleString("es-CL")+" registros, pero no se pudo confirmar que todas las cotizaciones coincidan. Revisa el control de validación; la descarga automática quedó bloqueada.");
         }
@@ -514,7 +523,7 @@ export default function PreviredExtractor() {
   }
 
   const auditFailed=audit.some(row=>row["Estado"]!=="OK")||unrecognizedPages.length>0||unclassifiedLines.length>0;
-  const automaticallyReconciled=fileMode==="certificate"&&rows.length>0&&audit.length>0&&!auditFailed;
+  const automaticallyReconciled=rows.length>0&&audit.length>0&&!auditFailed&&message.startsWith("Conciliación automática correcta:");
   const canDownload=automaticallyReconciled||(fileMode==="planilla"&&manualPlanillaReview&&rows.length>0&&!unrecognizedPages.length);
   const percent=progress&&progress.total?Math.min(100,Math.round(progress.page/progress.total*100)):0;
   function confirmPlanillaReview() {
@@ -571,139 +580,94 @@ export default function PreviredExtractor() {
   </div>;
 }
 
-function parsePlanilla(text:string,rawText?:string):MutablePreviredRow[] {
+function parsePlanilla(text:string,_rawText?:string):MutablePreviredRow[] {
   const result=new Map<string,MutablePreviredRow>();
-  const pages=text.split(/\f/);
-  for(const page of pages) {
-    const upper=normalize(page);
-    let context="UNKNOWN";
-    let currentAfp="AFP";
-    if(upper.includes("FONDO DE PENSIONES")&&upper.includes("AFP")) {
-      context="AFP";
-      const match=page.match(/AFP\s+([A-Za-zÁÉÍÓÚÑ]+)/i);
-      if(match)currentAfp="AFP "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
-    } else if(upper.includes("SEGURO SOCIAL PREVISIONAL"))context="SEGURO";
-    else if(upper.includes("MUTUAL DE SEGURIDAD")||upper.includes("ACHS")||upper.includes("INSTITUTO DE SEGURIDAD"))context="MUTUAL";
-    else if(upper.includes("CAJA DE COMPENSACION")||upper.includes("COT. DE NO AFILIADO A ISAPRE")||upper.includes("COTIZACION DE NO AFILIADO A ISAPRE")||upper.includes("LOS HEROES")||upper.includes("LOS ANDES"))context="CAJA";
-    else if(upper.includes("FONASA")||upper.includes("PLANILLA DE DECLARACION Y PAGO SIMULTANEO"))context="FONASA";
-    else if(upper.includes("ISAPRE")) {
-      context="ISAPRE";
-      const match=page.match(/ISAPRE\s+([A-Za-zÁÉÍÓÚÑ]+)/i);
-      if(match)context="ISAPRE "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
-    }
+  const upper=normalize(text);
+  let context="UNKNOWN";
+  let currentAfp="AFP";
+  if(upper.includes("SEGURO SOCIAL PREVISIONAL"))context="SEGURO";
+  else if(upper.includes("FONDO DE PENSIONES")&&upper.includes("AFP")) {
+    context="AFP";
+    const match=text.match(/AFP\s+(Capital|Cuprum|Modelo|PlanVital|Provida|Uno)/i);
+    if(match)currentAfp="AFP "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
+  } else if(upper.includes("DETALLE DE COMPROBANTE PAGO DE COTIZACIONES")||upper.includes("MUTUAL DE SEGURIDAD")||upper.includes("ACHS")||upper.includes("INSTITUTO DE SEGURIDAD"))context="MUTUAL";
+  else if(upper.includes("COTIZACIONES DE SALUD")||upper.includes("SUB TOTAL FONASA")||upper.includes("FONASA"))context="FONASA";
+  else if(upper.includes("COTIZACION DE NO AFILIADO A ISAPRE")||upper.includes("CAJA DE COMPENSACION")||upper.includes("LOS HEROES")||upper.includes("LOS ANDES"))context="CAJA";
+  else if(upper.includes("ISAPRE")) {
+    context="ISAPRE";
+    const match=text.match(/ISAPRE\s+([A-Za-zÁÉÍÓÚÑ]+)/i);
+    if(match)context="ISAPRE "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
+  }
 
-    for(const originalLine of page.split(/\r?\n/)) {
-      const line=originalLine.replace(/\s+/g," ").trim();
-      // No convertir RUT encontrados en encabezados, totales o textos legales en trabajadores.
-      const normalizedLine=normalize(line);
-      const excludedLabels=[
-        "DESCRIPCION DE CODIGOS DE MOVIMIENTO","PLANILLA JURIDICAMENTE VALIDA",
-        "PORCENTAJE VALORES","TOTAL REMUNERACION IMPONIBLE","TOTAL DE REMUNERACIONES",
-        "NOMBRE REPR. LEGAL","RUT REPR. LEGAL","DIRECCION:","COMUNA:",
-        "CODIGO ACTIVIDAD ECONOMICA","NUMERO DE AFILIADOS","NUMERO DE LINEAS",
-        "NUMERO HOJAS ANEXAS","COTIZACIONES COTIZ. LEGAL","REMUNERACION IMPONIBLE DECLARADA"
-      ];
-      if(excludedLabels.some(label=>normalizedLine.includes(label)))continue;
-      // En las planillas de Previred la fila comienza con el correlativo (1, 2, 3...)
-      // y después viene el RUT. Aceptar ambos formatos, sin aceptar RUT del encabezado.
-      const rutMatch=line.match(/^\s*(?:N[°ºo]?\s*)?(?:\d{1,3}\s+)?((?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk])\b/);
-      if(!rutMatch)continue;
-      const rut=formatRut(rutMatch[1]);
-      const idx=line.indexOf(rutMatch[1])+rutMatch[1].length;
-      const rest=line.slice(idx).trim();
-      const name=rest
-        .replace(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g," ")
-        .replace(/\b(?:AFP|JC|APV|SIS|REM|GRA|RET|LEY|COM)\b/gi," ")
-        .replace(/[\/|()[\],;:]+/g," ")
-        .replace(/\s+/g," ").trim();
-      // Un trabajador debe tener un nombre plausible; rechazar encabezados y cadenas largas.
-      const nameWords=name.split(/\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
-      if(name.length>80||nameWords.length<2||!/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(name))continue;
-      const row=result.get(rut)||newRow(rut,"","Período no identificado","Tipo no identificado");
-      if(name.length>String(row["Nombre PDF"]).length)row["Nombre PDF"]=name;
-      const amounts=(rest.match(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g)||[]).map(v=>parseMoney(v)).filter(v=>v>1000);
-      if(amounts.length) {
-        if(context==="SEGURO"){row["Renta Seguro Social"]=amounts[0];if(amounts.length>1)row["Monto Seguro Social"]=amounts[1];}
-        else if(context==="AFP") {
-          row["AFP"]=currentAfp;if(amounts.length>0)row["Renta AFP"]=amounts[0];if(amounts.length>1)row["Cotizacion AFP"]=amounts[1];if(amounts.length>2)row["SIS AFP"]=amounts[2];
-          if(amounts.length>=5){row["Renta AFC"]=amounts[3];row["AFC Empleador"]=amounts[4];}
-          else if(amounts.length>=4){row["Renta AFC"]=amounts[0];row["AFC Empleador"]=amounts[amounts.length-1];}
-        } else if(context==="FONASA"){row["Salud"]="FONASA";row["Renta Salud"]=amounts[0];if(amounts.length>1)row["Cotizacion Salud"]=amounts[1];}
-        else if(context.startsWith("ISAPRE")){row["Salud"]=context;row["Renta Salud"]=amounts[0];if(amounts.length>1)row["Cotizacion Salud"]=amounts[1];}
-        else if(context==="MUTUAL"){row["Renta Mutual"]=amounts[0];if(amounts.length>1)row["Cotizacion Mutual"]=amounts[1];}
-        else if(context==="CAJA"){row["_Renta_Caja_Base"]=amounts[0];if(amounts.length>1)row["Cotizacion Caja"]=amounts[1];}
+  for(const originalLine of text.split(/\r?\n/)) {
+    const line=originalLine.replace(/\s+/g," ").trim();
+    if(!line)continue;
+    const normalizedLine=normalize(line);
+    const excludedLabels=[
+      "DESCRIPCION DE CODIGOS DE MOVIMIENTO","PLANILLA JURIDICAMENTE VALIDA",
+      "PORCENTAJE VALORES","TOTAL REMUNERACION IMPONIBLE","TOTAL DE REMUNERACIONES",
+      "NOMBRE REPR. LEGAL","RUT REPR. LEGAL","DIRECCION:","COMUNA:",
+      "CODIGO ACTIVIDAD ECONOMICA","NUMERO DE AFILIADOS","NUMERO DE LINEAS",
+      "NUMERO HOJAS ANEXAS","COTIZACIONES COTIZ. LEGAL","REMUNERACION IMPONIBLE DECLARADA",
+      "RAZON SOCIAL O NOMBRE","NOMBRE REPRESENTANTE LEGAL","RUT REPRESENTANTE LEGAL"
+    ];
+    if(excludedLabels.some(label=>normalizedLine.includes(label)))continue;
+    const rutMatch=line.match(/^\s*(?:N[°ºo]?\s*)?(?:\d{1,3}\s+)?((?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk])\b/);
+    if(!rutMatch)continue;
+    const rut=formatRut(rutMatch[1]);
+    const idx=line.indexOf(rutMatch[1])+rutMatch[1].length;
+    const rest=line.slice(idx).trim();
+    // El primer importe con separador de miles marca el inicio de las columnas numéricas.
+    const firstMoney=rest.search(/\b\d{1,3}(?:\.\d{3})+\b|\b\d{4,}\b/);
+    if(firstMoney<0)continue;
+    const name=nameCleanup(rest.slice(0,firstMoney));
+    const nameWords=name.split(/\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
+    if(name.length>80||nameWords.length<2||/^(RUT|APELLIDO PATERNO|NOMBRE REPRESENTANTE)/i.test(name))continue;
+    const numericText=rest.slice(firstMoney);
+    const values=(numericText.match(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g)||[]).map(parseMoney);
+    if(!values.length)continue;
+    const row=result.get(rut)||newRow(rut,name,"Período no identificado","REM");
+    if(!row["Nombre PDF"]||String(row["Nombre PDF"]).length<name.length)row["Nombre PDF"]=name;
+    // No filtrar ceros: son columnas reales y eliminarlos desplaza los importes.
+    if(context==="SEGURO") {
+      row["Renta Seguro Social"]=values[0]||0;
+      row["Monto Seguro Social"]=values.length>2?values[2]||0:0;
+    } else if(context==="AFP") {
+      row["AFP"]=currentAfp;
+      row["Renta AFP"]=values[0]||0;
+      row["Cotizacion AFP"]=values[1]||0;
+      row["SIS AFP"]=values[2]||0;
+      row["APVI"]=values[3]||0;
+      if(values.length>=9) {
+        row["Renta AFC"]=values[6]||0;
+        row["AFC Afiliado"]=values[7]||0;
+        row["AFC Empleador"]=values[8]||0;
       }
-      result.set(rut,row);
-    }
-
-    // Respaldo para tablas PDF en que RUT, nombre y columnas numéricas quedan en
-    // líneas visuales distintas. Recuperar filas desde el flujo completo de texto.
-    const rutPattern=/(?:^|\s)(?:\d{1,3}\s+)?((?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk])(?=\s)/g;
-    const found=Array.from(page.matchAll(rutPattern));
-    for(let i=0;i<found.length;i++) {
-      const item=found[i];
-      const rut=formatRut(item[1]);
-      if(result.has(rut))continue;
-      const segmentStart=(item.index||0)+item[0].length;
-      const segmentEnd=i+1<found.length?(found[i+1].index||page.length):page.length;
-      const segment=page.slice(segmentStart,segmentEnd).replace(/\s+/g," ").trim();
-      const firstAmount=segment.search(/\b\d{1,3}(?:\.\d{3})+\b|\b\d{4,}\b/);
-      if(firstAmount<0)continue;
-      const name=segment.slice(0,firstAmount).replace(/[,:;|()[\]]/g," ").replace(/\s+/g," ").trim();
-      const words=name.split(/\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
-      const normalizedName=normalize(name);
-      if(name.length>65||words.length<2||/^(RUT|APELLIDO PATERNO|NOMBRE REPRESENTANTE|RUT REPRESENTANTE|NOMBRE O RAZON SOCIAL)/.test(normalizedName))continue;
-      const allNumbers=(segment.match(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g)||[]).map(value=>parseMoney(value));
-      const amounts=allNumbers.filter(value=>value>1000);
-      if(!amounts.length)continue;
-      const row=result.get(rut)||newRow(rut,name,"Período no identificado","Tipo no identificado");
-      row["Nombre PDF"]=name;
-      if(context==="SEGURO"){
-        row["Renta Seguro Social"]=allNumbers[0]||amounts[0];
-        // La tabla de Seguro Social contiene Renta, días/licencia anterior y luego el monto.
-        if(allNumbers.length>2)row["Monto Seguro Social"]=allNumbers[2]||0;
-        else if(amounts.length>1)row["Monto Seguro Social"]=amounts[1];
-      } else if(context==="AFP") {
-        row["AFP"]=currentAfp;
-        row["Renta AFP"]=allNumbers[0]||amounts[0];
-        if(allNumbers.length>1)row["Cotizacion AFP"]=allNumbers[1]||0;
-        if(allNumbers.length>2)row["SIS AFP"]=allNumbers[2]||0;
-        if(allNumbers.length>3)row["APVI"]=allNumbers[3]||0;
-        // En la planilla AFP, los campos AFC siguen a APVI, depósito convenido
-        // y depósito en cuenta de ahorro. Solo mapearlos cuando la fila trae esos campos.
-        if(allNumbers.length>=9) {
-          row["Renta AFC"]=allNumbers[6]||0;
-          row["AFC Afiliado"]=allNumbers[7]||0;
-          row["AFC Empleador"]=allNumbers[8]||0;
-        }
-      } else if(context==="FONASA"||context.startsWith("ISAPRE")){
-        row["Salud"]=context==="FONASA"?"FONASA":context;
-        row["Renta Salud"]=allNumbers[0]||amounts[0];
-        if(allNumbers.length>1)row["Cotizacion Salud"]=allNumbers[1]||0;
-      } else if(context==="MUTUAL"){
-        row["Renta Mutual"]=allNumbers[0]||amounts[0];
-        if(allNumbers.length>1)row["Cotizacion Mutual"]=allNumbers[1]||0;
-      } else if(context==="CAJA"){
-        row["_Renta_Caja_Base"]=allNumbers[0]||amounts[0];
-        if(allNumbers.length>1)row["Cotizacion Caja"]=allNumbers[1]||0;
-      }
-      result.set(rut,row);
-    }
+    } else if(context==="FONASA"||context.startsWith("ISAPRE")) {
+      row["Salud"]=context==="FONASA"?"FONASA":context;
+      row["Renta Salud"]=values[0]||0;
+      row["Cotizacion Salud"]=values[1]||0;
+    } else if(context==="MUTUAL") {
+      row["Renta Mutual"]=values[0]||0;
+      row["Cotizacion Mutual"]=values[1]||0;
+    } else if(context==="CAJA") {
+      row["_Renta_Caja_Base"]=values[0]||0;
+      row["Cotizacion Caja"]=values[1]||0;
+    } else continue;
+    result.set(rut,row);
   }
   for(const row of result.values()) {
-    if(!row["Renta Caja Isapre"]&&!row["Renta Caja No Isapre"]) {
-      if(String(row["Salud"]).includes("ISAPRE"))row["Renta Caja Isapre"]=Number(row["_Renta_Caja_Base"])||0;
-      else row["Renta Caja No Isapre"]=Number(row["_Renta_Caja_Base"])||0;
-    }
-  }
-  // Also recover rows missing from coordinate-grouped text using PDF.js's original
-  // content stream. Keep already parsed rows as authoritative to avoid double counting.
-  if(rawText&&rawText.trim()&&rawText!==text) {
-    const fallbackRows=parsePlanilla(rawText);
-    for(const fallbackRow of fallbackRows) {
-      const rut=String(fallbackRow["RUT"]||"");
-      if(rut&&!result.has(rut))result.set(rut,fallbackRow);
+    const cajaBase=Number(row["_Renta_Caja_Base"])||0;
+    if(cajaBase>0) {
+      if(String(row["Salud"]).toUpperCase().includes("ISAPRE"))row["Renta Caja Isapre"]=cajaBase;
+      else row["Renta Caja No Isapre"]=cajaBase;
     }
   }
   return [...result.values()];
+}
+function nameCleanup(value:string):string {
+  return value.replace(/\b\d+\b/g," ")
+    .replace(/\b(?:AFP|JC|JP|APV|SIS|REM|GRA|RET|LEY|COM)\b/gi," ")
+    .replace(/[\/|()[\],;:]+/g," ")
+    .replace(/\s+/g," ").trim();
 }
