@@ -122,10 +122,12 @@ function periodFromText(text:string):string {
   const periodIndex=normalizedText.indexOf("PERIODO");
   if(periodIndex>=0) {
     const periodSection=normalizedText.slice(periodIndex,periodIndex+220);
-    const labeledNumeric=periodSection.match(/\b(0?[1-9]|1[0-2])\s*(?:[\/.-]\s*|\s+)(20\d{2})\b/);
-    if(labeledNumeric)return toPeriod(labeledNumeric[1],labeledNumeric[2]);
+    // Algunas planillas rotulan el período como "JULIO 2026" y luego muestran
+    // la fecha de pago 12/08/2026 en la misma sección. El mes escrito es prioritario.
     const labeledNamed=periodSection.match(new RegExp("\\b("+MONTHS+")\\s+(20\\d{2})\\b","i"));
     if(labeledNamed)return monthLabel(labeledNamed[1],labeledNamed[2]);
+    const labeledNumeric=periodSection.match(/\b(0?[1-9]|1[0-2])\s*(?:[\/.-]\s*|\s+)(20\d{2})\b/);
+    if(labeledNumeric)return toPeriod(labeledNumeric[1],labeledNumeric[2]);
   }
 
   // Compatibilidad con certificados que muestran el mes en texto, sin depender
