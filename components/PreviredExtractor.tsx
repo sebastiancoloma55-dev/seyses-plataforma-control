@@ -572,14 +572,14 @@ function parsePlanilla(text:string,rawText?:string):MutablePreviredRow[] {
       const match=page.match(/AFP\s+([A-Za-zÁÉÍÓÚÑ]+)/i);
       if(match)currentAfp="AFP "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
     } else if(upper.includes("SEGURO SOCIAL PREVISIONAL"))context="SEGURO";
+    else if(upper.includes("MUTUAL DE SEGURIDAD")||upper.includes("ACHS")||upper.includes("INSTITUTO DE SEGURIDAD"))context="MUTUAL";
+    else if(upper.includes("CAJA DE COMPENSACION")||upper.includes("COT. DE NO AFILIADO A ISAPRE")||upper.includes("COTIZACION DE NO AFILIADO A ISAPRE")||upper.includes("LOS HEROES")||upper.includes("LOS ANDES"))context="CAJA";
+    else if(upper.includes("FONASA")||upper.includes("PLANILLA DE DECLARACION Y PAGO SIMULTANEO"))context="FONASA";
     else if(upper.includes("ISAPRE")) {
       context="ISAPRE";
       const match=page.match(/ISAPRE\s+([A-Za-zÁÉÍÓÚÑ]+)/i);
       if(match)context="ISAPRE "+match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
-    } else if(upper.includes("MUTUAL DE SEGURIDAD")||upper.includes("ACHS")||upper.includes("INSTITUTO DE SEGURIDAD"))context="MUTUAL";
-    else if(upper.includes("CAJA DE COMPENSACION")||upper.includes("LOS HEROES")||upper.includes("LOS ANDES"))context="CAJA";
-    else if(upper.includes("FONASA"))context="FONASA";
-    else if(upper.includes("PLANILLA DE DECLARACION Y PAGO SIMULTANEO"))context="FONASA";
+    }
 
     for(const originalLine of page.split(/\r?\n/)) {
       const line=originalLine.replace(/\s+/g," ").trim();
@@ -642,19 +642,40 @@ function parsePlanilla(text:string,rawText?:string):MutablePreviredRow[] {
       const words=name.split(/\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
       const normalizedName=normalize(name);
       if(name.length>65||words.length<2||/^(RUT|APELLIDO PATERNO|NOMBRE REPRESENTANTE|RUT REPRESENTANTE|NOMBRE O RAZON SOCIAL)/.test(normalizedName))continue;
-      const amounts=(segment.match(/\b\d{1,3}(?:\.\d{3})+\b|\b\d{4,}\b/g)||[]).map(value=>parseMoney(value)).filter(value=>value>1000);
+      const allNumbers=(segment.match(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g)||[]).map(value=>parseMoney(value));
+      const amounts=allNumbers.filter(value=>value>1000);
       if(!amounts.length)continue;
       const row=result.get(rut)||newRow(rut,name,"Período no identificado","Tipo no identificado");
       row["Nombre PDF"]=name;
-      if(context==="SEGURO"){row["Renta Seguro Social"]=amounts[0];if(amounts.length>1)row["Monto Seguro Social"]=amounts[1];}
-      else if(context==="AFP") {
-        row["AFP"]=currentAfp;row["Renta AFP"]=amounts[0];if(amounts.length>1)row["Cotizacion AFP"]=amounts[1];if(amounts.length>2)row["SIS AFP"]=amounts[2];
-        if(amounts.length>=5){row["Renta AFC"]=amounts[3];row["AFC Empleador"]=amounts[4];}
-        else if(amounts.length>=4){row["Renta AFC"]=amounts[0];row["AFC Empleador"]=amounts[amounts.length-1];}
-      } else if(context==="FONASA"){row["Salud"]="FONASA";row["Renta Salud"]=amounts[0];if(amounts.length>1)row["Cotizacion Salud"]=amounts[1];}
-      else if(context.startsWith("ISAPRE")){row["Salud"]=context;row["Renta Salud"]=amounts[0];if(amounts.length>1)row["Cotizacion Salud"]=amounts[1];}
-      else if(context==="MUTUAL"){row["Renta Mutual"]=amounts[0];if(amounts.length>1)row["Cotizacion Mutual"]=amounts[1];}
-      else if(context==="CAJA"){row["_Renta_Caja_Base"]=amounts[0];if(amounts.length>1)row["Cotizacion Caja"]=amounts[1];}
+      if(context==="SEGURO"){
+        row["Renta Seguro Social"]=allNumbers[0]||amounts[0];
+        // La tabla de Seguro Social contiene Renta, días/licencia anterior y luego el monto.
+        if(allNumbers.length>2)row["Monto Seguro Social"]=allNumbers[2]||0;
+        else if(amounts.length>1)row["Monto Seguro Social"]=amounts[1];
+      } else if(context==="AFP") {
+        row["AFP"]=currentAfp;
+        row["Renta AFP"]=allNumbers[0]||amounts[0];
+        if(allNumbers.length>1)row["Cotizacion AFP"]=allNumbers[1]||0;
+        if(allNumbers.length>2)row["SIS AFP"]=allNumbers[2]||0;
+        if(allNumbers.length>3)row["APVI"]=allNumbers[3]||0;
+        // En la planilla AFP, los campos AFC siguen a APVI, depósito convenido
+        // y depósito en cuenta de ahorro. Solo mapearlos cuando la fila trae esos campos.
+        if(allNumbers.length>=9) {
+          row["Renta AFC"]=allNumbers[6]||0;
+          row["AFC Afiliado"]=allNumbers[7]||0;
+          row["AFC Empleador"]=allNumbers[8]||0;
+        }
+      } else if(context==="FONASA"||context.startsWith("ISAPRE")){
+        row["Salud"]=context==="FONASA"?"FONASA":context;
+        row["Renta Salud"]=allNumbers[0]||amounts[0];
+        if(allNumbers.length>1)row["Cotizacion Salud"]=allNumbers[1]||0;
+      } else if(context==="MUTUAL"){
+        row["Renta Mutual"]=allNumbers[0]||amounts[0];
+        if(allNumbers.length>1)row["Cotizacion Mutual"]=allNumbers[1]||0;
+      } else if(context==="CAJA"){
+        row["_Renta_Caja_Base"]=allNumbers[0]||amounts[0];
+        if(allNumbers.length>1)row["Cotizacion Caja"]=allNumbers[1]||0;
+      }
       result.set(rut,row);
     }
   }
@@ -664,10 +685,14 @@ function parsePlanilla(text:string,rawText?:string):MutablePreviredRow[] {
       else row["Renta Caja No Isapre"]=Number(row["_Renta_Caja_Base"])||0;
     }
   }
-  // Fallback: PDF.js sometimes returns text in content-stream order rather than
-  // visual rows. If no row was parsed, retry the original stream and recover by RUT.
-  if(result.size===0&&rawText&&rawText.trim()&&rawText!==text) {
-    return parsePlanilla(rawText);
+  // Also recover rows missing from coordinate-grouped text using PDF.js's original
+  // content stream. Keep already parsed rows as authoritative to avoid double counting.
+  if(rawText&&rawText.trim()&&rawText!==text) {
+    const fallbackRows=parsePlanilla(rawText);
+    for(const fallbackRow of fallbackRows) {
+      const rut=String(fallbackRow["RUT"]||"");
+      if(rut&&!result.has(rut))result.set(rut,fallbackRow);
+    }
   }
   return [...result.values()];
 }
