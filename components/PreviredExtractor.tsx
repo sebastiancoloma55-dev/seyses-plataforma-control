@@ -395,8 +395,14 @@ export default function PreviredExtractor() {
             && /\bRut\s*:/i.test(pageText);
           // La extracción por coordenadas puede separar el RUT del nombre entre líneas.
           // Detectar la fila en el texto completo, no exigir que empiece al inicio de una línea.
-          const hasPlanillaRows=/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText)
-            ||/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(rawPageText);
+          // No confundir las páginas resumen del empleador/representante con
+          // páginas de detalle de trabajadores: también contienen RUT y nombres.
+          const employerSummary=/IDENTIFICACI[ÓO]N DEL EMPLEADOR|NOMBRE REPRESENTANTE LEGAL|RUT REPRESENTANTE LEGAL|RESUMEN DE COTIZACIONES/i.test(pageText);
+          const hasWorkerDetailHeader=/APELLIDO PATERNO|APELLIDO MATERNO|IDENTIFICACI[ÓO]N DEL TRABAJADOR|NOMBRES\s+REMUNERACI[ÓO]N/i.test(pageText);
+          const hasPlanillaRows=!employerSummary&&hasWorkerDetailHeader&&(
+            /(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(pageText)
+            ||/(?:^|\s)(?:\d{1,3}\s+)?(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\s+[A-Za-zÁÉÍÓÚÑ]/i.test(rawPageText)
+          );
           const hasContributionRows=contributionLines(pageText).matched.length>0;
           const pageMode:"certificate"|"planilla" =
             hasIndividualCertificateHeader ? "certificate" : hasPlanillaRows ? "planilla" : hasContributionRows ? "certificate" : "planilla";
