@@ -189,11 +189,11 @@ function contributionLines(pageText:string):{
 
   // A line that contains a period, payment type and numeric content resembles a
   // contribution row. If it was not parsed, report it rather than silently omitting it.
-  const marker=new RegExp("\\\\b(?:"+MONTHS+")\\\\s+\\\\d{4}\\\\s+(?:REM|GRA|RET|LEY|COM)\\\\b","i");
+  const marker=new RegExp("\\b(?:"+MONTHS+")\\s+\\d{4}\\s+(?:REM|GRA|RET|LEY|COM)\\b","i");
   const unmatched:string[]=[];
   for(let i=0;i<lines.length;i++) {
     if(consumedLines.has(i))continue;
-    if(marker.test(lines[i])&&/\\d/.test(lines[i]))unmatched.push(lines[i]);
+    if(marker.test(lines[i])&&/\d/.test(lines[i]))unmatched.push(lines[i]);
   }
   return {matched,unmatched};
 }
