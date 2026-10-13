@@ -485,7 +485,7 @@ export default function PreviredExtractor() {
     </div>}
     {rows.length>0&&<>
       <div className="section-head" style={{marginTop:18}}><h3>Vista previa</h3><span className="status">{new Set(rows.map(row=>String(row.RUT))).size.toLocaleString("es-CL")} trabajadores · {rows.length.toLocaleString("es-CL")} filas</span></div>
-      <div className="table-wrap"><table><thead><tr>{COLUMNS.slice(0,Math.min(COLUMNS.length,12)).map(column=><th key={column}>{column}</th>)}</tr></thead><tbody>{rows.slice(0,100).map((row,index)=><tr key={String(row.RUT)+"-"+String(row["Período cotización"])+"-"+index}>{COLUMNS.slice(0,Math.min(COLUMNS.length,12)).map(column=><td key={column}>{String(row[column]??"")}</td>)}</tr>)}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr>{COLUMNS.map(column=><th key={column}>{column}</th>)}</tr></thead><tbody>{rows.slice(0,100).map((row,index)=><tr key={String(row.RUT)+"-"+String(row["Período cotización"])+"-"+index}>{COLUMNS.map(column=><td key={column}>{String(row[column]??"")}</td>)}</tr>)}</tbody></table></div>
       {rows.length>100&&<p className="muted">La vista previa muestra 100 registros; el Excel incluye los {rows.length.toLocaleString("es-CL")} registros detectados.</p>}
       <p className="muted">En Certificado de Pagos, AFC se exporta como monto certificado sin desglose. No se atribuye al afiliado ni al empleador sin respaldo del documento.</p>
     </>}
