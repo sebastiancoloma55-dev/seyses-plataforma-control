@@ -542,13 +542,26 @@ function parsePlanilla(text:string):MutablePreviredRow[] {
 
     for(const originalLine of page.split(/\r?\n/)) {
       const line=originalLine.replace(/\s+/g," ").trim();
-      const rutMatch=line.match(/\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\b/);
+      // No convertir RUT encontrados en encabezados, totales o textos legales en trabajadores.
+      const normalizedLine=normalize(line);
+      const excludedLabels=[
+        "DESCRIPCION DE CODIGOS DE MOVIMIENTO","PLANILLA JURIDICAMENTE VALIDA",
+        "PORCENTAJE VALORES","TOTAL REMUNERACION IMPONIBLE","TOTAL DE REMUNERACIONES",
+        "NOMBRE REPR. LEGAL","RUT REPR. LEGAL","DIRECCION:","COMUNA:",
+        "CODIGO ACTIVIDAD ECONOMICA","NUMERO DE AFILIADOS","NUMERO DE LINEAS",
+        "NUMERO HOJAS ANEXAS","COTIZACIONES COTIZ. LEGAL","REMUNERACION IMPONIBLE DECLARADA"
+      ];
+      if(excludedLabels.some(label=>normalizedLine.includes(label)))continue;
+      const rutMatch=line.match(/^\s*(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dKk]\b/);
       if(!rutMatch)continue;
       const rut=formatRut(rutMatch[0]);
       const idx=line.indexOf(rutMatch[0])+rutMatch[0].length;
       const rest=line.slice(idx).trim();
-      const row=result.get(rut)||newRow(rut,"","Período no identificado","Tipo no identificado");
       const name=rest.replace(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g," ").replace(/\s+/g," ").trim().replace(/(?:AFP|JC)\s*$/i,"").trim();
+      // Un trabajador debe tener un nombre plausible; rechazar encabezados y cadenas largas.
+      const nameWords=name.split(/\s+/).filter(word=>/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(word));
+      if(name.length>80||nameWords.length<2||!/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(name))continue;
+      const row=result.get(rut)||newRow(rut,"","Período no identificado","Tipo no identificado");
       if(name.length>String(row["Nombre PDF"]).length)row["Nombre PDF"]=name;
       const amounts=(rest.match(/\b\d{1,3}(?:\.\d{3})+\b|\b\d+\b/g)||[]).map(v=>parseMoney(v)).filter(v=>v>1000);
       if(amounts.length) {
