@@ -1,0 +1,32 @@
+name: SEYSES Cloudflare validation
+
+on:
+  push:
+    branches:
+      - feat/cloudflare-migracion
+  pull_request:
+    branches:
+      - main
+      - feat/vercel-nextjs-adaptacion
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: TypeScript check
+        run: npm run typecheck
+      - name: Build Next.js for Cloudflare Workers
+        run: npx opennextjs-cloudflare build

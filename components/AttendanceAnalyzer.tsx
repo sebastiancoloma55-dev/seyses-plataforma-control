@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import * as XLSX from "xlsx";
 import { getSupabase } from "@/lib/supabase";
 
@@ -8,7 +8,7 @@ type RawRow = Record<string, unknown>;
 type FieldKey =
   | "worker_rut" | "worker_id" | "worker_name" | "branch" | "job_title" | "supervisor" | "contract_hours_weekly" | "on_payroll" | "permission_note" | "work_date"
   | "shift_name" | "scheduled_duration" | "scheduled_start" | "scheduled_end" | "actual_start"
-  | "actual_end" | "worked_duration" | "overtime_duration" | "overtime_duration_secondary" | "break_duration" | "attendance_status";
+  | "actual_end" | "worked_duration" | "overtime_duration" | "overtime_duration_secondary" | "break_duration" | "late_duration" | "attendance_status";
 type AttendanceRow = {
   source_row: number;
   worker_key: string;
@@ -63,10 +63,11 @@ const FIELDS: { key: FieldKey; label: string; required?: boolean; aliases: strin
   { key: "scheduled_end", label: "Fin turno planificado", aliases: ["salida turno","salida programada","hora salida turno","fin turno","scheduled end","shift end","fin programado"] },
   { key: "actual_start", label: "Primera entrada real", aliases: ["entrada","marcacion entrada","marcación entrada","check in","punch in","hora ingreso","hora entrada real","first in","actual start","entrada real"] },
   { key: "actual_end", label: "Última salida real", aliases: ["salida","marcacion salida","marcación salida","check out","punch out","hora salida","ultima salida","última salida","last out","actual end","salida real"] },
-  { key: "worked_duration", label: "Horas trabajadas (si vienen totalizadas)", aliases: ["horas trabajadas","horas asis","horas asistencia","horas asistidas","horas totales","total horas","worked hours","horas ordinarias","duration","total hrs","horas efectivas","worked duration","total trabajado"] },
-  { key: "overtime_duration", label: "Horas extra (primera columna)", aliases: ["horas extra","hora extra","overtime","overtime hours","hhee","he 50","he 100","extra hours"] },
+  { key: "worked_duration", label: "Horas trabajadas (si vienen totalizadas)", aliases: ["horas trabajadas","h trabajadas","h trabajada","h trabaj","horas asis","horas asistencia","horas asistidas","horas totales","total horas","worked hours","horas ordinarias","duration","total hrs","horas efectivas","worked duration","total trabajado"] },
+  { key: "overtime_duration", label: "Horas extra (primera columna)", aliases: ["horas extra","hora extra","h ext","h extras","hextras","overtime","overtime hours","hhee","he 50","he 100","extra hours"] },
   { key: "overtime_duration_secondary", label: "Horas extra (segunda columna, opcional)", aliases: ["horas extra 50","horas extra 30","overtime 2","second overtime","he 50 segundo"] },
   { key: "break_duration", label: "Colación / descanso", aliases: ["colacion","colación","descanso","break","break minutes","minutos colacion","duracion descanso","duración descanso"] },
+  { key: "late_duration", label: "Atraso (minutos; reportes Talana)", aliases: ["desc","descuento","atraso minutos","minutos atraso","late minutes","late duration"] },
   { key: "attendance_status", label: "Estado / incidencia", aliases: ["estado","asistencia","status","incidencia","ausentismo","novedad","observacion","observación"] }
 ];
 const ERP_OPTIONS = ["ERP genérico / mapeo automático","Talana","Buk","GeoVictoria","Rankmi","Rex+","Control iD / ZKTeco","SAP SuccessFactors","UKG / Kronos","Workday","ADP","Oracle HCM","Cegid / Meta4","Sesame HR","Softland","Otro"];
@@ -151,6 +152,378 @@ function downloadCsv(rows: Record<string, string | number>[], filename: string) 
 function currentMonthStart() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`; }
 function currentMonthEnd() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(new Date(d.getFullYear(),d.getMonth()+1,0).getDate()).padStart(2,"0")}`; }
 
+
+type PositionedPdfToken = { str: string; x: number; y: number; width: number };
+type PdfVisualLine = { y: number; items: PositionedPdfToken[] };
+type PdfFieldAnchor = { key: FieldKey; x: number };
+
+const PDF_DATE_PATTERN = /\b(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{4}|\d{4}[\/.-]\d{1,2}[\/.-]\d{1,2})\b/;
+
+function groupPdfVisualLines(tokens: PositionedPdfToken[]): PdfVisualLine[] {
+  const sorted = [...tokens].sort((a, b) => b.y - a.y || a.x - b.x);
+  const lines: PdfVisualLine[] = [];
+  for (const token of sorted) {
+    let target = lines.find(line => Math.abs(line.y - token.y) <= 6.5);
+    if (!target) { target = { y: token.y, items: [] }; lines.push(target); }
+    target.items.push(token);
+    target.items.sort((a, b) => a.x - b.x);
+    target.y = target.items.reduce((sum, item) => sum + item.y, 0) / target.items.length;
+  }
+  return lines.sort((a, b) => b.y - a.y);
+}
+
+function detectPdfField(phrase: string): FieldKey | null {
+  const value = norm(phrase);
+  if (!value || value.length > 45) return null;
+  if (/^(fecha|date|dia|dia asistencia|fecha turno|work date)$/.test(value) || value.startsWith("fecha asistencia")) return "work_date";
+  if (value === "rut" || value === "run" || value.includes("rut trabajador") || value.includes("numero documento")) return "worker_rut";
+  if (value === "id" || value.includes("codigo empleado") || value.includes("employee id") || value === "legajo") return "worker_id";
+  if (value.includes("nombre") || value.includes("trabajador") || value.includes("colaborador") || value === "empleado" || value.includes("employee name")) return "worker_name";
+  if (value === "turno" || value.includes("turno asignado") || value === "jornada" || value === "shift") return "shift_name";
+  if ((value.includes("hora") || value.startsWith("h ")) && value.includes("asignad")) return "scheduled_duration";
+  if (value.includes("asignad") && (value.includes("hora") || value.includes("duracion") || value.includes("duration"))) return "scheduled_duration";
+  if (value.includes("trabajad") && (value.includes("hora") || value.startsWith("h ") || value.includes("worked"))) return "worked_duration";
+  if (value.includes("extra") || value === "h ext" || value === "hhee" || value === "overtime") return "overtime_duration";
+  if (value.startsWith("desc") || value.includes("atraso") || value.includes("late minutes")) return "late_duration";
+  if (value.includes("justific") || value === "permiso" || value.includes("observacion") || value.includes("incidencia")) return "permission_note";
+  if (value.includes("reemplazo")) return "permission_note";
+  if (value.includes("colacion") || value.includes("descanso") || value === "break") return "break_duration";
+  if (value.includes("supervisor") || value === "jefe") return "supervisor";
+  if (value.includes("sucursal") || value === "local" || value === "tienda" || value === "branch" || value === "site") return "branch";
+  if (value.includes("cargo") || value === "puesto" || value === "job title") return "job_title";
+  if ((value.includes("entrada") || value === "ingreso" || value === "check in") && /(planific|programad|turno|scheduled|planned)/.test(value)) return "scheduled_start";
+  if ((value.includes("salida") || value === "egreso" || value === "check out") && /(planific|programad|turno|scheduled|planned)/.test(value)) return "scheduled_end";
+  if (value === "entrada" || value === "ingreso" || value.includes("marcacion entrada") || value === "check in" || value.includes("actual start") || value.includes("primera entrada")) return "actual_start";
+  if (value === "salida" || value === "egreso" || value.includes("marcacion salida") || value === "check out" || value.includes("actual end") || value.includes("ultima salida")) return "actual_end";
+  const exact = FIELDS.find(field => field.aliases.some(alias => norm(alias) === value));
+  return exact?.key ?? null;
+}
+
+function pdfLinePhrases(line: PdfVisualLine): Array<{ phrase: string; x: number }> {
+  const items = line.items;
+  const found: Array<{ phrase: string; x: number }> = [];
+  for (let start = 0; start < items.length; start++) {
+    let phrase = "";
+    for (let end = start; end < Math.min(items.length, start + 4); end++) {
+      if (end > start) {
+        const gap = items[end].x - (items[end - 1].x + items[end - 1].width);
+        if (gap > 38 || items[end].x - items[start].x > 150) break;
+      }
+      phrase = (phrase + " " + items[end].str).trim();
+      found.push({ phrase, x: items[start].x });
+    }
+  }
+  return found;
+}
+
+function findUniversalPdfHeader(lines: PdfVisualLine[]): { bottomY: number; anchors: PdfFieldAnchor[] } | null {
+  let best: { centerY: number; score: number; matches: Array<{key:FieldKey;x:number;y:number}> } | null = null;
+  for (const center of lines) {
+    const band = lines.filter(line => Math.abs(line.y - center.y) <= 15);
+    const matches: Array<{key:FieldKey;x:number;y:number}> = [];
+    const seen = new Set<string>();
+    for (const line of band) {
+      for (const phrase of pdfLinePhrases(line)) {
+        const key = detectPdfField(phrase.phrase);
+        if (!key) continue;
+        const signature = key + ":" + Math.round(phrase.x);
+        if (seen.has(signature)) continue;
+        seen.add(signature);
+        matches.push({key,x:phrase.x,y:line.y});
+      }
+    }
+    const unique = new Set(matches.map(match => match.key));
+    // Individual attendance PDFs often show the worker identity above the table, not as a column.
+    const hasTime = unique.has("worked_duration") || unique.has("scheduled_duration") || unique.has("actual_start") || unique.has("actual_end");
+    if (!unique.has("work_date") || !hasTime || unique.size < 4) continue;
+    const score = unique.size + (unique.has("shift_name") ? 2 : 0) + (unique.has("worked_duration") ? 2 : 0);
+    if (!best || score > best.score) best = {centerY:center.y,score,matches};
+  }
+  if (!best) return null;
+  const anchors = new Map<FieldKey, {x:number;distance:number}>();
+  for (const match of best.matches) {
+    const distance = Math.abs(match.y - best.centerY);
+    const previous = anchors.get(match.key);
+    if (!previous || distance < previous.distance) anchors.set(match.key,{x:match.x,distance});
+  }
+  const sorted = [...anchors.entries()].map(([key,value])=>({key,x:value.x,distance:value.distance})).sort((a,b)=>a.x-b.x);
+  const uniqueAnchors: PdfFieldAnchor[] = [];
+  for (const item of sorted) {
+    if (uniqueAnchors.some(existing=>existing.key===item.key)) continue;
+    if (uniqueAnchors.length && Math.abs(uniqueAnchors[uniqueAnchors.length-1].x-item.x)<8) continue;
+    uniqueAnchors.push({key:item.key,x:item.x});
+  }
+  if (!uniqueAnchors.some(anchor=>anchor.key==="work_date")) return null;
+  return {bottomY:Math.min(...best.matches.map(match=>match.y))-2,anchors:uniqueAnchors};
+}
+
+function extractPdfLabelValue(lines: PdfVisualLine[], label: string): string {
+  const plain = lines.map(line => line.items.map(item => item.str).join(" ").replace(/\s+/g, " ").trim());
+  for (let i = 0; i < plain.length; i++) {
+    const lower = plain[i].toLowerCase();
+    const index = lower.indexOf(label.toLowerCase());
+    if (index < 0) continue;
+    let value = plain[i].slice(index + label.length).replace(/^[\s:.-]+/, "");
+    value = value.split(/\s+(?:RUT|RUN|Raz[oó]n social|Departamento|Sucursal|Cargo|Fecha de emisi[oó]n)\s*:?/i)[0].trim();
+    if (value) return value;
+    const next = (plain[i + 1] || "").trim();
+    if (next && !/^(?:RUT|RUN|Raz[oó]n social|Departamento|Sucursal|Cargo|Fecha de emisi[oó]n)\s*:?/i.test(next)) return next;
+  }
+  return "";
+}
+
+function parseTalanaShortDate(value: string, year: number): string {
+  const match = value.match(/\b([A-Za-zÁÉÍÓÚÑáéíóúñ]{3,12})\.?\s+(\d{1,2})\b/);
+  if (!match) return parseDate(value);
+  const monthText = norm(match[1]).replace(/\./g,"");
+  const monthKey = monthText.slice(0,3);
+  const months: Record<string,string> = {
+    jan:"01", ene:"01", feb:"02", mar:"03", apr:"04", abr:"04",
+    may:"05", jun:"06", jul:"07", aug:"08", ago:"08", sep:"09",
+    oct:"10", nov:"11", dec:"12", dic:"12"
+  };
+  const month = months[monthKey];
+  const day = Number(match[2]);
+  if (!month || day < 1 || day > 31) return "";
+  const iso = String(year)+"-"+month+"-"+String(day).padStart(2,"0");
+  const parsed = new Date(iso+"T00:00:00Z");
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0,10)===iso ? iso : "";
+}
+
+type AttendancePdfProgress = { page:number; total:number; rows:number; workers:number };
+
+function parseTalanaAttendancePage(
+  page:{tokens:PositionedPdfToken[];lines:PdfVisualLine[];width:number},
+  pageNumber:number,
+  fallbackYear:number,
+  file:File,
+  totalPages:number
+):{rows:RawRow[];rut:string;name:string;hasDateRows:boolean} {
+  const columns = [
+    "RUT", "Nombre empleado", "Sucursal", "Fecha", "Turno asignado",
+    "Inicio turno planificado", "Fin turno planificado", "Entrada", "Salida",
+    "H. Trabajadas", "H. Ext.", "Desc.", "Justificación", "Horas Asignadas"
+  ];
+  const rows:RawRow[] = [];
+  const lines=page.lines;
+  const pageText=lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+  const normalizedPageText=pageText.replace(/\s+/g," ");
+  const pageYearMatch=pageText.match(/\b(?:19|20)\d{2}\b/);
+  const reportYear=pageYearMatch?Number(pageYearMatch[0]):fallbackYear;
+  const rutPattern=/\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
+  const employee=extractPdfLabelValue(lines,"Empleado")||extractPdfLabelValue(lines,"Nombre");
+  const employeeLine=lines.map(line=>line.items.map(item=>item.str).join(" ").replace(/\s+/g," ").trim()).find(line=>/\bEmpleado\b/i.test(line));
+  const labelledRut=extractPdfLabelValue(lines,"Rut").match(rutPattern)?.[0]?.toUpperCase()??"";
+  const employeeLineRut=employeeLine?.match(rutPattern)?.[0]?.toUpperCase()??"";
+  const pageFirstRut=normalizedPageText.match(rutPattern)?.[0]?.toUpperCase()??"";
+  const filenameRut=totalPages===1?(file.name.match(rutPattern)?.[0]?.toUpperCase()??""):"";
+  const rut=employeeLineRut||labelledRut||pageFirstRut||filenameRut;
+  const branch=extractPdfLabelValue(lines,"Sucursal");
+  const baseBoundaries=[60,151,214,246,276,311,345,390,456,520,560];
+  const scale=page.width/595;
+  const boundaries=baseBoundaries.map(value=>value*scale);
+
+  for(const line of lines) {
+    const cells=Array.from({length:12},()=>[] as string[]);
+    for(const item of line.items) {
+      let cellIndex=0;
+      while(cellIndex<boundaries.length&&item.x>=boundaries[cellIndex])cellIndex++;
+      cells[cellIndex].push(item.str);
+    }
+    const dateCell=cells[0].join(" ").replace(/\s+/g," ").trim();
+    const date=parseTalanaShortDate(dateCell,reportYear);
+    if(!date)continue;
+    const schedule=cells[2].join(" ").replace(/\s+/g," ").trim();
+    const times=schedule.match(/\b(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\b/);
+    rows.push({
+      "RUT":rut,
+      "Nombre empleado":employee,
+      "Sucursal":branch,
+      "Fecha":date,
+      "Turno asignado":cells[1].join(" ").replace(/\s+/g," ").trim(),
+      "Inicio turno planificado":times?.[1]??"",
+      "Fin turno planificado":times?.[2]??"",
+      "Entrada":cells[3].join(" ").trim(),
+      "Salida":cells[4].join(" ").trim(),
+      "H. Trabajadas":cells[5].join(" ").trim(),
+      "H. Ext.":cells[6].join(" ").trim(),
+      "Desc.":cells[7].join(" ").trim(),
+      "Justificación":cells[9].join(" ").replace(/\s+/g," ").trim(),
+      "Horas Asignadas":cells[10].join(" ").trim()
+    });
+  }
+  return {rows,rut,name:employee,hasDateRows:rows.length>0};
+}
+
+async function parseAttendancePdf(
+  file:File,
+  onProgress?:(progress:AttendancePdfProgress)=>void,
+  isCancelled?:()=>boolean
+):Promise<{headers:string[];rows:RawRow[];pages:number;erp?:string;employeesDetected?:number}> {
+  const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc=new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs",import.meta.url).toString();
+  const pdf=await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer()),stopAtErrors:true}).promise;
+  if(pdf.numPages>10000) {
+    await pdf.destroy();
+    throw new Error("El PDF tiene "+pdf.numPages.toLocaleString("es-CL")+" páginas. El máximo por archivo es 10.000; divide el reporte en varios PDF.");
+  }
+
+  let textPages=0;
+  let mode:"talana"|"generic"|null=null;
+  let fallbackYear=new Date().getFullYear();
+  let rememberedHeader:{bottomY:number;anchors:PdfFieldAnchor[]}|null=null;
+  const rows:RawRow[]=[];
+  const discoveredKeys=new Set<FieldKey>();
+  const employeeKeys=new Set<string>();
+  const missingIdentityPages:number[]=[];
+  const pagesWithoutRows:number[]=[];
+  const genericRutPattern=/\b(?:\d{1,2}(?:\.\d{3}){2}|\d{7,8})-[\dkK]\b/;
+  const updateEvery=Math.max(1,Math.ceil(pdf.numPages/100));
+
+  try {
+    for(let pageNumber=1;pageNumber<=pdf.numPages;pageNumber++) {
+      if(isCancelled?.())throw new Error("Lectura del PDF cancelada. No se importó ningún registro.");
+      const page=await pdf.getPage(pageNumber);
+      const content=await page.getTextContent();
+      const rawItems=content.items as unknown as Array<{str?:unknown;transform?:unknown;width?:unknown}>;
+      const tokens:PositionedPdfToken[]=rawItems
+        .filter(item=>typeof item.str==="string"&&item.str.trim()&&Array.isArray(item.transform))
+        .map(item=>{
+          const transform=item.transform as number[];
+          return {str:(item.str as string).trim(),x:Number(transform[4])||0,y:Number(transform[5])||0,width:Number(item.width)||0};
+        });
+      if(!tokens.length) {
+        page.cleanup();
+        pagesWithoutRows.push(pageNumber);
+        if(pageNumber===1||pageNumber===pdf.numPages||pageNumber%updateEvery===0) {
+          onProgress?.({page:pageNumber,total:pdf.numPages,rows:rows.length,workers:employeeKeys.size});
+        }
+        if(pageNumber%5===0)await new Promise(resolve=>setTimeout(resolve,0));
+        continue;
+      }
+      textPages++;
+      const lines=groupPdfVisualLines(tokens);
+      const pageText=lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+      const pageWidth=page.getViewport({scale:1}).width;
+      page.cleanup();
+      if(!mode) {
+        mode=/reporte individual de asistencia/i.test(pageText)&&/h\.\s*trab/i.test(pageText)?"talana":"generic";
+        const yearMatch=pageText.match(/\b(?:19|20)\d{2}\b/);
+        if(yearMatch)fallbackYear=Number(yearMatch[0]);
+      }
+
+      if(mode==="talana") {
+        const parsed=parseTalanaAttendancePage({tokens,lines,width:pageWidth},pageNumber,fallbackYear,file,pdf.numPages);
+        if(!parsed.hasDateRows) {
+          pagesWithoutRows.push(pageNumber);
+        } else {
+          rows.push(...parsed.rows);
+          if(!parsed.rut||!parsed.name)missingIdentityPages.push(pageNumber);
+          else employeeKeys.add(parsed.rut.replace(/[.\s]/g,"").toUpperCase());
+        }
+      } else {
+        const detectedHeader=findUniversalPdfHeader(lines);
+        if(detectedHeader)rememberedHeader=detectedHeader;
+        const header=detectedHeader??rememberedHeader;
+        if(header) {
+          const normalizedPageText=pageText.replace(/\s+/g," ");
+          const labelledRut=extractPdfLabelValue(lines,"RUT").match(genericRutPattern)?.[0]?.toUpperCase()??"";
+          const filenameRut=pdf.numPages===1?(file.name.match(genericRutPattern)?.[0]?.toUpperCase()??""):"";
+          const rut=labelledRut||filenameRut||normalizedPageText.match(genericRutPattern)?.[0]?.toUpperCase()||"";
+          const employeeName=extractPdfLabelValue(lines,"Empleado")||extractPdfLabelValue(lines,"Nombre");
+          const branch=extractPdfLabelValue(lines,"Sucursal");
+          const ordered=[...header.anchors].sort((a,b)=>a.x-b.x);
+          let rowsThisPage=0;
+          const candidateLines=lines.filter(line=>{
+            const joined=line.items.map(item=>item.str).join(" ");
+            return line.y<header.bottomY&&PDF_DATE_PATTERN.test(joined);
+          });
+          for(const line of candidateLines) {
+            const rowItems=tokens.filter(item=>Math.abs(item.y-line.y)<=5.5).sort((a,b)=>a.x-b.x);
+            const rowText=rowItems.map(item=>item.str).join(" ");
+            const dateMatch=rowText.match(PDF_DATE_PATTERN);
+            if(!dateMatch)continue;
+            const date=parseDate(dateMatch[0]);
+            if(!date)continue;
+            const cells=new Map<FieldKey,string[]>();
+            for(const anchor of ordered)cells.set(anchor.key,[]);
+            for(const item of rowItems) {
+              let index=0;
+              for(let i=1;i<ordered.length;i++) {
+                const boundary=(ordered[i-1].x+ordered[i].x)/2;
+                if(item.x>=boundary)index=i;else break;
+              }
+              cells.get(ordered[index].key)?.push(item.str);
+            }
+            const cell=(key:FieldKey)=>(cells.get(key)||[]).join(" ").replace(/\s+/g," ").trim();
+            const row:RawRow={};
+            for(const anchor of ordered) {
+              const field=FIELDS.find(item=>item.key===anchor.key);
+              if(!field)continue;
+              discoveredKeys.add(anchor.key);
+              row[field.label]=anchor.key==="work_date"?date:cell(anchor.key);
+            }
+            const rutAnchor=ordered.some(anchor=>anchor.key==="worker_rut");
+            const nameAnchor=ordered.some(anchor=>anchor.key==="worker_name");
+            const rutField=FIELDS.find(item=>item.key==="worker_rut")!;
+            const nameField=FIELDS.find(item=>item.key==="worker_name")!;
+            if(!rutAnchor){row[rutField.label]=rut;discoveredKeys.add("worker_rut");}
+            if(!nameAnchor){row[nameField.label]=employeeName;discoveredKeys.add("worker_name");}
+            if(!ordered.some(anchor=>anchor.key==="branch")&&branch) {
+              row[FIELDS.find(item=>item.key==="branch")!.label]=branch;
+              discoveredKeys.add("branch");
+            }
+            row[FIELDS.find(item=>item.key==="work_date")!.label]=date;
+            if(String(row[rutField.label]??"").trim()||String(row[nameField.label]??"").trim()) {
+              rows.push(row);rowsThisPage++;
+            }
+          }
+          if(!rowsThisPage)pagesWithoutRows.push(pageNumber);
+        } else pagesWithoutRows.push(pageNumber);
+      }
+      if(pageNumber===1||pageNumber===pdf.numPages||pageNumber%updateEvery===0) {
+        onProgress?.({page:pageNumber,total:pdf.numPages,rows:rows.length,workers:employeeKeys.size});
+      }
+      if(pageNumber%5===0)await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    if(!textPages)throw new Error("El PDF no tiene texto seleccionable. Si es un escaneo o imagen, necesitará OCR; por ahora descarga un PDF digital o Excel desde el ERP.");
+    if(!rows.length)throw new Error("No pude detectar filas del PDF. Los formatos de asistencia difieren entre ERP; descarga Excel/CSV o solicita un adaptador para este modelo.");
+    if(mode==="talana"&&missingIdentityPages.length) {
+      throw new Error("Se detectaron jornadas pero faltan RUT o nombre en "+missingIdentityPages.length+" página(s). Se bloqueó el archivo para evitar fusionar trabajadores. Primeras páginas: "+missingIdentityPages.slice(0,30).join(", "));
+    }
+    if(mode==="talana"&&pdf.numPages>1&&employeeKeys.size<2) {
+      throw new Error("El PDF contiene varias páginas, pero el lector detectó menos de dos trabajadores distintos. La importación se bloqueó para evitar fusionar a todas las personas en una sola.");
+    }
+    if(mode==="talana"&&pagesWithoutRows.length) {
+      throw new Error("No pude verificar jornadas en "+pagesWithoutRows.length+" página(s). No se importó nada para evitar omitir personas o días. Primeras páginas: "+pagesWithoutRows.slice(0,30).join(", "));
+    }
+    if(mode==="generic") {
+      if(pagesWithoutRows.length)throw new Error("No se pudieron leer filas de asistencia en "+pagesWithoutRows.length+" página(s). Se bloqueó la importación para evitar cargar un reporte incompleto.");
+      const orderedKeys=[...discoveredKeys];
+      const headerKeys=orderedKeys.filter(key=>rows.some(row=>Object.prototype.hasOwnProperty.call(row,FIELDS.find(field=>field.key===key)!.label)));
+      return {headers:headerKeys.map(key=>FIELDS.find(field=>field.key===key)!.label),rows,pages:pdf.numPages,erp:"ERP genérico / mapeo automático"};
+    }
+    return {
+      headers:["RUT","Nombre empleado","Sucursal","Fecha","Turno asignado","Inicio turno planificado","Fin turno planificado","Entrada","Salida","H. Trabajadas","H. Ext.","Desc.","Justificación","Horas Asignadas"],
+      rows,pages:pdf.numPages,erp:"Talana",employeesDetected:employeeKeys.size
+    };
+  } finally {
+    await pdf.destroy();
+  }
+}
+
+function parseLateMinutes(value: unknown): number | null {
+  const raw = text(value).toLowerCase().replace(/,/g, ".").trim();
+  if (!raw || /^(?:-|—|n\/a|na)$/.test(raw)) return null;
+  const minutesWithUnit = raw.match(/(-?\d+(?:\.\d+)?)\s*(?:min(?:uto)?s?)/i);
+  if (minutesWithUnit) return Math.max(0, Math.round(Number(minutesWithUnit[1])));
+  const hhmm = raw.match(/^(-?\d{1,4}):(\d{1,2})(?::\d{1,2})?$/);
+  if (hhmm) return Math.max(0, Number(hhmm[1]) * 60 + Number(hhmm[2]));
+  const minutesOnly = raw.match(/^(-?\d+(?:\.\d+)?)$/);
+  if (minutesOnly) return Math.max(0, Math.round(Number(minutesOnly[1])));
+  return parseDuration(value);
+}
+
 export default function AttendanceAnalyzer({ userId }: { userId: string }) {
   const [file, setFile] = useState<File|null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
@@ -169,6 +542,8 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
   const [savedRows, setSavedRows] = useState<AttendanceRow[]>([]);
   const [savedImport, setSavedImport] = useState<ImportInfo|null>(null);
   const [loadingSaved, setLoadingSaved] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState<AttendancePdfProgress|null>(null);
+  const cancelPdfRef = useRef(false);
 
   async function loadImports() {
     try {
@@ -211,8 +586,42 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     const selected = event.target.files?.[0] ?? null;
     setError(""); setNotice(""); setFile(selected); setHeaders([]); setRawRows([]); setMapping({});
     if (!selected) return;
-    if (selected.size > 15*1024*1024) { setError("El archivo supera 15 MB. El máximo permitido es 15 MB."); return; }
-    if (!/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible todavía. Usa Excel (.xlsx/.xls) o CSV (.csv); PDF y conectores ERP nativos requieren adaptadores separados."); return; }
+    const isPdf = /\.pdf$/i.test(selected.name);
+    const maxBytes = isPdf ? 250*1024*1024 : 15*1024*1024;
+    if (selected.size > maxBytes) {
+      setError(isPdf ? "El PDF supera 250 MB. Divide el reporte en varios archivos digitales más pequeños." : "El archivo supera 15 MB. El máximo permitido para Excel/CSV es 15 MB.");
+      setFile(null);
+      return;
+    }
+    if (!isPdf && !/\.(xlsx|xls|csv)$/i.test(selected.name)) { setError("Formato no compatible. Usa Excel (.xlsx/.xls), CSV (.csv) o un PDF digital de asistencia con tabla y encabezados reconocibles."); return; }
+    if (isPdf) {
+      cancelPdfRef.current = false;
+      setPdfProgress({page:0,total:0,rows:0,workers:0});
+      try {
+        const parsedPdf = await parseAttendancePdf(selected, progress => setPdfProgress(progress), () => cancelPdfRef.current);
+        setPdfProgress(null);
+        const cols = parsedPdf.headers;
+        const objects = parsedPdf.rows;
+        if (!objects.length || !cols.length) throw new Error("El PDF no contiene filas de asistencia utilizables.");
+        if (objects.length > 150000) throw new Error("El reporte supera 150.000 filas. Divide el archivo por períodos más pequeños.");
+        setErp(parsedPdf.erp ?? "ERP genérico / mapeo automático");
+        setHeaders(cols); setRawRows(objects);
+        const next: Partial<Record<FieldKey,string>> = {};
+        for (const field of FIELDS) {
+          const found = findHeader(cols, field.aliases);
+          if (found) next[field.key] = found;
+        }
+        setMapping(next);
+        // Preserve the period the user selected. The report's actual date range is
+        // shown below and compared against the selected range so a September file
+        // cannot silently replace an intended August import.
+        setNotice("PDF de asistencia leído en el navegador: " + objects.length.toLocaleString("es-CL") + " jornadas en " + parsedPdf.pages + " página(s)" + (parsedPdf.employeesDetected !== undefined ? " · " + parsedPdf.employeesDetected.toLocaleString("es-CL") + " trabajadores distintos" : "") + ". Revisa los RUT/nombres detectados antes de importar.");
+      } catch (e) {
+        setPdfProgress(null);
+        setError(e instanceof Error ? e.message : "No se pudo leer el PDF de asistencia.");
+      }
+      return;
+    }
     try {
       const bytes = await selected.arrayBuffer();
       const book = XLSX.read(bytes,{type:"array",cellDates:true});
@@ -274,6 +683,29 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     setMapping(prev => ({...prev,[field]:value || undefined}));
   }
 
+  const sourceDateBounds = useMemo(() => {
+    if (!mapping.work_date) return null;
+    const dates = rawRows
+      .map(row => parseDate(row[mapping.work_date!]))
+      .filter((date): date is string => Boolean(date))
+      .sort();
+    return dates.length ? { start: dates[0], end: dates[dates.length - 1], count: dates.length } : null;
+  }, [rawRows, mapping.work_date]);
+
+  const formatDateLabel = (value: string) => {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? match[3]+"/"+match[2]+"/"+match[1] : value;
+  };
+  const hasValidSelectedPeriod = Boolean(periodStart && periodEnd && periodEnd >= periodStart);
+  const sourceHasNoOverlap = Boolean(
+    sourceDateBounds && hasValidSelectedPeriod &&
+    (sourceDateBounds.end < periodStart || sourceDateBounds.start > periodEnd)
+  );
+  const sourceExtendsOutsidePeriod = Boolean(
+    sourceDateBounds && hasValidSelectedPeriod && !sourceHasNoOverlap &&
+    (sourceDateBounds.start < periodStart || sourceDateBounds.end > periodEnd)
+  );
+
   const mapped = useMemo(() => rawRows.flatMap((row,index) => {
     const value = (field: FieldKey) => mapping[field] ? row[mapping[field]!] : "";
     const rut = text(value("worker_rut"));
@@ -297,7 +729,8 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     const contractHours = Number.isFinite(contractHoursRaw) ? contractHoursRaw : 0;
     const startDelta = plannedStart && actualStart ? (parseTimeMinutes(actualStart) ?? 0)-(parseTimeMinutes(plannedStart) ?? 0) : 0;
     const normalizedLate = startDelta < -720 ? startDelta + 1440 : startDelta > 720 ? startDelta - 1440 : startDelta;
-    const late = plannedStart && actualStart ? Math.max(0,normalizedLate) : 0;
+    const directLate = mapping.late_duration ? parseLateMinutes(value("late_duration")) : null;
+    const late = directLate !== null ? directLate : (plannedStart && actualStart ? Math.max(0,normalizedLate) : 0);
     const workerKey = rut || employeeId || name;
     return [{
       source_row:index+2,
@@ -401,22 +834,43 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
 
   return <div className="attendance-module">
     <section className="panel">
-      <div className="section-head"><h2>1. Cargar reporte de cualquier ERP</h2><span className="status">Excel / CSV</span></div>
-      <p className="muted">Sube un archivo de asistencia exportado desde tu ERP o reloj biométrico. El analizador reconoce encabezados habituales y permite mapearlos manualmente; los conectores nativos específicos se incorporan por adaptador.</p>
+      <div className="section-head"><h2>1. Cargar reporte de cualquier ERP</h2><span className="status">Excel / CSV / PDF ERP</span></div>
+      <p className="muted">Sube reportes Excel/CSV de distintos ERP o PDF digitales de asistencia. Detecta encabezados comunes, permite mapear columnas manualmente y totaliza horas por trabajador. Los PDF escaneados requieren OCR, que no está habilitado.</p>
       <div className="attendance-grid">
         <div className="field"><label htmlFor="attendance-erp">Sistema de origen</label><select id="attendance-erp" value={erp} onChange={e=>setErp(e.target.value)}>{ERP_OPTIONS.map(o=><option key={o}>{o}</option>)}</select></div>
         {erp==="Otro" && <div className="field"><label htmlFor="attendance-erp-custom">Nombre de ERP</label><input id="attendance-erp-custom" value={customErp} onChange={e=>setCustomErp(e.target.value)} placeholder="Nombre del sistema" /></div>}
-        <div className="field"><label htmlFor="attendance-file">Reporte de asistencia</label><input id="attendance-file" type="file" accept=".xlsx,.xls,.csv" onChange={selectFile} /></div>
+        <div className="field"><label htmlFor="attendance-file">Reporte de asistencia</label><input id="attendance-file" type="file" accept=".xlsx,.xls,.csv,.pdf" onChange={selectFile} disabled={busy} /></div>
         <div className="field"><label htmlFor="attendance-start">Período desde</label><input id="attendance-start" type="date" value={periodStart} onChange={e=>setPeriodStart(e.target.value)} required /></div>
         <div className="field"><label htmlFor="attendance-end">Período hasta</label><input id="attendance-end" type="date" value={periodEnd} onChange={e=>setPeriodEnd(e.target.value)} required /></div>
       </div>
-      {file && <div className="notice">{file.name} · {(file.size/1024).toFixed(1)} KB · ${rawRows.length.toLocaleString("es-CL")} filas leídas · Dentro del período: ${mapped.length.toLocaleString("es-CL")} · Excluidas/sin identificación/fecha válida: ${invalidRows.toLocaleString("es-CL")}</div>}
+      {file && <div className="notice">{file.name} · {(file.size/1024).toFixed(1)} KB · {rawRows.length.toLocaleString("es-CL")} filas leídas · Dentro del período: {mapped.length.toLocaleString("es-CL")} · Excluidas/sin identificación/fecha válida: {invalidRows.toLocaleString("es-CL")}</div>}
+      {pdfProgress && <div className="notice" role="status">
+        <div style={{display:"flex",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}><strong>Procesando PDF página por página</strong><span>{pdfProgress.page.toLocaleString("es-CL")} / {pdfProgress.total.toLocaleString("es-CL")} · {pdfProgress.rows.toLocaleString("es-CL")} jornadas · {pdfProgress.workers.toLocaleString("es-CL")} trabajadores</span></div>
+        <progress value={pdfProgress.page} max={Math.max(1,pdfProgress.total)} style={{width:"100%",height:12,marginTop:8}} />
+        <div className="actions" style={{marginTop:8}}><button type="button" className="btn" onClick={()=>{cancelPdfRef.current=true;setNotice("Cancelando lectura de forma segura…");}}>Cancelar lectura PDF</button></div>
+      </div>}
+      {sourceDateBounds && <div className="notice" role="status">
+        Período detectado en los datos: <strong>{formatDateLabel(sourceDateBounds.start)} al {formatDateLabel(sourceDateBounds.end)}</strong>.
+        {" "}Período seleccionado: <strong>{formatDateLabel(periodStart)} al {formatDateLabel(periodEnd)}</strong>.
+      </div>}
+      {sourceHasNoOverlap && sourceDateBounds && <div className="notice error" role="alert">
+        <strong>⚠ El período del archivo no coincide con el seleccionado.</strong>{" "}
+        El archivo contiene registros desde {formatDateLabel(sourceDateBounds.start)} hasta {formatDateLabel(sourceDateBounds.end)}, pero seleccionaste {formatDateLabel(periodStart)} a {formatDateLabel(periodEnd)}. No hay jornadas dentro de ese período; no se permitirá importar este archivo como si correspondiera al mes seleccionado.
+        <div className="actions" style={{marginTop:10}}>
+          <button type="button" className="btn" onClick={()=>{setPeriodStart(sourceDateBounds.start);setPeriodEnd(sourceDateBounds.end);setError("");setNotice("Período ajustado al detectado en el archivo: "+formatDateLabel(sourceDateBounds.start)+" al "+formatDateLabel(sourceDateBounds.end)+".");}}>
+            Usar período detectado ({formatDateLabel(sourceDateBounds.start)} al {formatDateLabel(sourceDateBounds.end)})
+          </button>
+        </div>
+      </div>}
+      {sourceExtendsOutsidePeriod && sourceDateBounds && <div className="notice" role="status">
+        Atención: el archivo contiene fechas fuera del período seleccionado. Solo se considerarán las jornadas entre {formatDateLabel(periodStart)} y {formatDateLabel(periodEnd)}; las demás quedarán excluidas.
+      </div>}
       {error && <div className="notice error" role="alert">{error}</div>}
       {notice && <div className="notice success" role="status">{notice}</div>}
     </section>
 
     {headers.length>0 && <section className="panel">
-      <div className="section-head"><h2>2. Confirmar equivalencias de columnas</h2><span className="muted">${headers.length} columnas detectadas</span></div>
+      <div className="section-head"><h2>2. Confirmar equivalencias de columnas</h2><span className="muted">{headers.length} columnas detectadas</span></div>
       <p className="muted">El formato de cada ERP cambia. Confirma las asignaciones antes del cálculo para que las horas y los turnos no se atribuyan a una columna equivocada.</p>
       <div className="attendance-grid mappings">{FIELDS.map(field=><div className="field" key={field.key}><label htmlFor={`map-${field.key}`}>{field.label}{field.required?" *":""}</label><select id={`map-${field.key}`} value={mapping[field.key]??""} onChange={e=>choose(field.key,e.target.value)}><option value="">— No utilizar —</option>{headers.map(h=><option key={h} value={h}>{h}</option>)}</select></div>)}</div>
       <label className="attendance-check"><input type="checkbox" checked={replaceExisting} onChange={e=>setReplaceExisting(e.target.checked)} /> Reemplazar importaciones anteriores del mismo ERP y período exacto (elimina sus registros previos).</label>
@@ -424,7 +878,7 @@ export default function AttendanceAnalyzer({ userId }: { userId: string }) {
     </section>}
 
     {mapped.length>0 && <section className="panel">
-      <div className="section-head"><h2>3. Resumen por trabajador</h2><span className="status">${grouped.length} trabajadores</span></div>
+      <div className="section-head"><h2>3. Resumen por trabajador</h2><span className="status">{grouped.length} trabajadores</span></div>
       <div className="grid attendance-kpis">
         <Metric label="Horas trabajadas" value={fmtMinutes(mapped.reduce((s,r)=>s+r.worked_minutes,0))} foot="Total de filas del período"/>
         <Metric label="Horas programadas" value={fmtMinutes(mapped.reduce((s,r)=>s+r.scheduled_minutes,0))} foot="A partir del turno asignado"/>
