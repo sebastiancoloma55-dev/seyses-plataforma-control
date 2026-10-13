@@ -155,29 +155,47 @@ function parseContributionLine(line:string):{institution:string;period:string;pa
     folio:match[8]||""
   };
 }
-function contributionLines(pageText:string):Array<{line:string;data:NonNullable<ReturnType<typeof parseContributionLine>>}> {
+function contributionLines(pageText:string):{
+  matched:Array<{line:string;data:NonNullable<ReturnType<typeof parseContributionLine>>}>;
+  unmatched:string[]
+} {
   const lines=pageText.split(/\r?\n/).map(line=>line.replace(/\s+/g," ").trim()).filter(Boolean);
-  const result:Array<{line:string;data:NonNullable<ReturnType<typeof parseContributionLine>>}>=[];
+  const matched:Array<{line:string;data:NonNullable<ReturnType<typeof parseContributionLine>>}>=[];
   const signatures=new Set<string>();
+  const consumedLines=new Set<number>();
   for(let i=0;i<lines.length;i++) {
     const direct=parseContributionLine(lines[i]);
     if(direct) {
+      consumedLines.add(i);
       const signature=[direct.institution,direct.period,direct.paymentType,direct.base,direct.amount,direct.folio].join("|");
-      if(!signatures.has(signature)){signatures.add(signature);result.push({line:lines[i],data:direct});}
+      if(!signatures.has(signature)){signatures.add(signature);matched.push({line:lines[i],data:direct});}
       continue;
     }
     // Handle extractors that split a table row across adjacent text baselines.
-    for(let span=2;span<=3 && i+span-1<lines.length;span++) {
+    let joinedRow=false;
+    for(let span=2;span<=3&&i+span-1<lines.length;span++) {
       const candidate=lines.slice(i,i+span).join(" ");
       const joined=parseContributionLine(candidate);
       if(!joined)continue;
+      for(let j=i;j<i+span;j++)consumedLines.add(j);
       const signature=[joined.institution,joined.period,joined.paymentType,joined.base,joined.amount,joined.folio].join("|");
-      if(!signatures.has(signature)){signatures.add(signature);result.push({line:candidate,data:joined});}
+      if(!signatures.has(signature)){signatures.add(signature);matched.push({line:candidate,data:joined});}
       i+=span-1;
+      joinedRow=true;
       break;
     }
+    if(joinedRow)continue;
   }
-  return result;
+
+  // A line that contains a period, payment type and numeric content resembles a
+  // contribution row. If it was not parsed, report it rather than silently omitting it.
+  const marker=new RegExp("\\\\b(?:"+MONTHS+")\\\\s+\\\\d{4}\\\\s+(?:REM|GRA|RET|LEY|COM)\\\\b","i");
+  const unmatched:string[]=[];
+  for(let i=0;i<lines.length;i++) {
+    if(consumedLines.has(i))continue;
+    if(marker.test(lines[i])&&/\\d/.test(lines[i]))unmatched.push(lines[i]);
+  }
+  return {matched,unmatched};
 }
 function createAggregate(rut:string,name:string,period:string,paymentType:string):Aggregate {
   return {
@@ -191,8 +209,9 @@ function addCertificatePage(
   const header=extractRutAndName(pageText);
   const hasHeader=/Que,\s*las\s*cotizaciones\s*previsionales/i.test(pageText);
   const identity=header || (!hasHeader ? fallbackIdentity : null);
-  const contributions=contributionLines(pageText);
-  const unknown:string[]=[];
+  const lineParse=contributionLines(pageText);
+  const contributions=lineParse.matched;
+  const unknown:string[]=lineParse.unmatched.map(line=>"Línea de cotización no interpretada en página "+pageNumber+": "+line);
   if(!identity||!contributions.length) {
     return {identity:header||fallbackIdentity,matchedLines:contributions.length,hasHeader,recognizedContributionPage:false,unclassified:unknown,duplicatesSkipped:0};
   }
