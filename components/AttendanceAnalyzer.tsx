@@ -393,13 +393,19 @@ async function parseAttendancePdf(
           return {str:(item.str as string).trim(),x:Number(transform[4])||0,y:Number(transform[5])||0,width:Number(item.width)||0};
         });
       if(!tokens.length) {
+        page.cleanup();
         pagesWithoutRows.push(pageNumber);
+        if(pageNumber===1||pageNumber===pdf.numPages||pageNumber%updateEvery===0) {
+          onProgress?.({page:pageNumber,total:pdf.numPages,rows:rows.length,workers:employeeKeys.size});
+        }
         if(pageNumber%5===0)await new Promise(resolve=>setTimeout(resolve,0));
         continue;
       }
       textPages++;
       const lines=groupPdfVisualLines(tokens);
       const pageText=lines.map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+      const pageWidth=page.getViewport({scale:1}).width;
+      page.cleanup();
       if(!mode) {
         mode=/reporte individual de asistencia/i.test(pageText)&&/h\.\s*trab/i.test(pageText)?"talana":"generic";
         const yearMatch=pageText.match(/\b(?:19|20)\d{2}\b/);
@@ -407,7 +413,7 @@ async function parseAttendancePdf(
       }
 
       if(mode==="talana") {
-        const parsed=parseTalanaAttendancePage({tokens,lines,width:page.getViewport({scale:1}).width},pageNumber,fallbackYear,file,pdf.numPages);
+        const parsed=parseTalanaAttendancePage({tokens,lines,width:pageWidth},pageNumber,fallbackYear,file,pdf.numPages);
         if(!parsed.hasDateRows) {
           pagesWithoutRows.push(pageNumber);
         } else {

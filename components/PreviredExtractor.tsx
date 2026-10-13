@@ -337,6 +337,7 @@ export default function PreviredExtractor() {
               return {str:(item.str as string).trim(),x:Number(transform[4])||0,y:Number(transform[5])||0,width:Number(item.width)||0};
             });
           const pageText=linesFromItems(items).map(line=>line.items.map(item=>item.str).join(" ")).join("\n");
+          page.cleanup();
           if(pageText.trim())textPages++;
           if(!mode&&pageText.trim()) {
             mode=/Certificado\s+de\s+Pagos|cotizaciones\s*previsionales\s*del\s*Sr/i.test(pageText)?"certificate":"planilla";
