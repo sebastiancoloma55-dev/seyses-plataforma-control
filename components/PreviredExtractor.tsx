@@ -424,7 +424,12 @@ export default function PreviredExtractor() {
               unrecognized.push(pageNumber);
             }
           } else if(pageMode==="planilla") {
-            const parsed=parsePlanilla(pageText,rawPageText) as MutablePreviredRow[];
+            // Las páginas resumen identifican al empleador y representante legal, no son
+            // filas de trabajadores. No ejecutar el fallback por RUT sobre esas páginas,
+            // porque puede convertir los RUT legales en falsos trabajadores.
+            const isEmployerSummary=/IDENTIFICACI[ÓO]N DEL EMPLEADOR|NOMBRE REPRESENTANTE LEGAL|RUT REPRESENTANTE LEGAL|RESUMEN DE COTIZACIONES/i.test(pageText);
+            const hasWorkerDetailHeader=/APELLIDO PATERNO|APELLIDO MATERNO|IDENTIFICACI[ÓO]N DEL TRABAJADOR|NOMBRES\s+REMUNERACI[ÓO]N/i.test(pageText);
+            const parsed=(!isEmployerSummary&&hasWorkerDetailHeader?parsePlanilla(pageText,rawPageText):[]) as MutablePreviredRow[];
             const period=periodFromText(pageText);
             const paymentType=paymentTypeFromText(pageText);
             for(const row of parsed) {
