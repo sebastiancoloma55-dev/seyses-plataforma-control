@@ -418,7 +418,7 @@ export default function PreviredExtractor() {
         setProgress({page:totalPages,total:totalPages,workers:new Set(records.map(item=>String(item.row.RUT))).size,phase:"Conciliación terminada"});
         if(canAutoReconcile) {
           setMessage("Conciliación automática correcta: "+new Set(records.map(item=>String(item.row.RUT))).size.toLocaleString("es-CL")+" trabajadores · "+records.length.toLocaleString("es-CL")+" filas por período/tipo · "+pagesWithRows.toLocaleString("es-CL")+"/"+totalPages.toLocaleString("es-CL")+" páginas procesadas · diferencias $0. "+(duplicatesSkipped?duplicatesSkipped+" duplicados exactos omitidos. ":"")+"Se añadió la hoja Control_Validacion.");
-        } else if(mode==="planilla"&&manualPlanillaNeeded) {
+        } else if(mode==="planilla"&&planillaManualNeeded) {
           setMessage("Se leyeron "+records.length.toLocaleString("es-CL")+" registros de planilla y "+pagesWithRows.toLocaleString("es-CL")+"/"+totalPages.toLocaleString("es-CL")+" páginas con datos. Este formato requiere revisión manual antes de habilitar la descarga, porque la estructura de planillas varía entre instituciones.");
         } else {
           setMessage("Se encontraron "+records.length.toLocaleString("es-CL")+" registros, pero no se pudo confirmar que todas las cotizaciones coincidan. Revisa el control de validación; la descarga automática quedó bloqueada.");
